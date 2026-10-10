@@ -1,0 +1,11 @@
+# Auto-detect device configuration
+# Format: tab_name=model_keyword
+# tab_name must match: power_supply, waveform_generator, oscilloscope, electronic_load
+# model_keyword is matched against the *IDN? response (case-insensitive)
+
+power_supply=E36311A
+waveform_generator=33511B
+oscilloscope=MDO34
+electronic_load=PLZ664WA
+data_acquisition=DAQ973A
+high_power_supply=N8734A

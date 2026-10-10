@@ -1,0 +1,37 @@
+reg,name,rw,description
+0x01,SVI3_VERSION,RO,Read-only -- Protocol version.
+0x02,TYPE_MFG_ID,RO,Read-only -- Device type and manufacturer ID.
+0x03,MODEL_ID,RO,Read-only -- Device model identifier.
+0x04,TEN_BIT_TEL_AVAIL,RO,Read-only -- 10-bit telemetry channels available. Bitmap.
+0x05,SIXTEEN_BIT_TEL_AVAIL,RO,Read-only -- 16-bit telemetry channels available. Bitmap.
+0x06,CRC_EN_PSI_VID8,RO,Read-only -- [7]:CRC_EN [6:4]:PSI state [0]:VID bit8.
+0x07,VID[7:0],RO,Read-only -- Current VID low byte. V = (VID9bit x 5 + 245) mV. Combine with 0x06[0] for bit8.
+0x08,DEFAULT_SLEW_VID_DEFAULT,RO,Read-only -- [7:4]:default slew rate [3:0]:default VID.
+0x09,SCALING,RO,Read-only -- [7:6]:VIN_SCALE(00=Custom/10=32V/11=64V) [5:3]:IOUT_SCALE(001=32A..111=2048A) [2:0]:IIN_SCALE(001=4A..111=256A).
+0x0A,MAX_VOUT,RO,Read-only -- Max output voltage. V = code x 20 mV.
+0x0B,MIN_VOUT,RO,Read-only -- Min output voltage. V = code x 5 mV.
+0x0C,P_SYS_SCALE,RO,Read-only -- System power scale. 0=Custom 1=32W 2=64W 3=128W 4=256W 5=512W 6=1024W 7=2048W.
+0x0D,DEFAULT_VID,RO,Read-only -- Default boot VID[7:0]. V = (VID9bit x 5 + 245) mV. Bit8 from 0x0C[0].
+0x0E,DEFAULT_LL,RO,Read-only -- Default load-line resistance. LL = code x 25 uOhm = code x 0.025 mOhm.
+0x0F,FIRMWARE_ID,RO,Read-only -- Firmware identifier.
+0x10,FAULT_STATUS,RO,Read-only -- [6]:Phase [5]:VRHOT [4]:OCP_WARN [3]:OTP [2]:UVP [1]:OVP [0]:OCP. 1=fault active.
+0x11,NACK_STATUS,RO,Read-only -- [5]:Cmd before ACK [4]:Framing [3]:CRC [2]:Undef reg [1]:Undef payload [0]:Not executable.
+0x20,SLEW_DECAY,RW,R/W -- [3:0]:up slew = (code x 2.5 + 2.5) mV/us [4]:down slew 1=1/4x 0=1x [7:5]:decay conditions.
+0x21,LL_ADJUST,RW,R/W -- [4:0]: LL% = code x 10. 0=disabled 10=100% 20=200% of DEFAULT_LL(0x0E). Codes 21-31 invalid.
+0x22,VOUT_OFFSET,RW,R/W -- Offset = code x 5 - 250 mV. 0=disabled. Applied to VID/VID_MIN/VID_MAX/OVP/UVP.
+0x23,VID_MAX,RW,R/W -- Max VID limit. V = (code x 10 + 250) mV. 0=disabled.
+0x24,VID_MIN,RW,R/W -- Min VID limit. V = (code x 10 + 250) mV. 0=disabled.
+0x25,TEN_BIT_TEL_EN,RW,R/W -- 10-bit telemetry enables. [6]:PIN [5]:VIN [4]:IIN [3]:Temp2 [2]:Temp1 [1]:VOUT [0]:IOUT. 1=enabled.
+0x26,SIXTEEN_BIT_TEL_EN,RW,R/W -- 16-bit telemetry enables. Same bitmap as 0x25. 1=enabled.
+0x27,OCP_THRESH,RW,R/W -- OCP fault threshold. I = code x 4 x IOUT_SCALE / 512 A. 0=disabled.
+0x28,OCP_WARN_THRESH,RW,R/W -- OCP warning threshold. I = code x 4 x IOUT_SCALE / 512 A. 0=disabled.
+0x29,OCP_WARN_PULSE_DELAY,RW,R/W -- [7:3]:warn min pulse = code x 0.5 us [2:0]:fault delay = code x 5 us (0=instantaneous).
+0x2A,VRHOT_THRESH,RW,R/W -- VR hot warning. T = code - 40 C. 0=disabled.
+0x2B,OTP_THRESH,RW,R/W -- Over-temp protection. T = code - 40 C. 0=disabled.
+0x2C,OVP_UVP_CONFIG,RW,R/W -- [7]:OVP ref 0=VID 1=VID_MAX [6:4]:OVP delta=code x 50+50 mV [3]:UVP ref 0=VID 1=VID_MIN [2:0]:UVP delta. 0=disabled.
+0x2D,PHASE_SHED,RW,R/W -- [7:4]:PSI1 active phase count [3:0]:PSI2 active phase count.
+0x2E,I_IN_WARN_THRESH,RW,R/W -- Input current warning. I = code x 4 x IIN_SCALE / 512 A. 0=disabled.
+0x30,TEL_IOUT,RO,Read-only -- Output current telemetry. 10-bit raw.
+0x31,TEL_VOUT,RO,Read-only -- Output voltage telemetry. 10-bit raw.
+0x32,TEL_TEMP,RO,Read-only -- Temperature telemetry. 10-bit raw.
+0x33,TEL_POWER,RO,Read-only -- Power telemetry. 10-bit raw.

@@ -1,0 +1,4 @@
+Protocol,Register ,Type,Action,Write Data
+PMBus,0x00,Byte,Read,
+PMBus,0x00,Byte,Write,0x01
+PMBus,0x00,Byte,Read,

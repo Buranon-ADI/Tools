@@ -1,0 +1,98 @@
+Register,Register Name,Bit,Bit Name,Green Condition,Red Condition,Gray Condition
+0x00,PAGE,N/A,page_check,Readback matches expected page,Readback does not match expected page,Never
+0x78,STATUS_BYTE,7,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x78,STATUS_BYTE,6,off,Bit = 0,Bit = 1,Never
+0x78,STATUS_BYTE,5,vout_ov_fault,Bit = 0,Bit = 1,Never
+0x78,STATUS_BYTE,4,iout_oc_fault,Bit = 0,Bit = 1,Never
+0x78,STATUS_BYTE,3,vin_uv_fault,Bit = 0,Bit = 1,Never
+0x78,STATUS_BYTE,2,temperature,Bit = 0,Bit = 1,Never
+0x78,STATUS_BYTE,1,cml,Bit = 0,Bit = 1,Never
+0x78,STATUS_BYTE,0,none_of_the_above,Bit = 0,Bit = 1,Never
+0x79,STATUS_WORD (High Byte),7,vout,Bit = 0,Bit = 1,Never
+0x79,STATUS_WORD (High Byte),6,iout_pout,Bit = 0,Bit = 1,Never
+0x79,STATUS_WORD (High Byte),5,input,Bit = 0,Bit = 1,Never
+0x79,STATUS_WORD (High Byte),4,mfr_specific,Bit = 0,Bit = 1,Never
+0x79,STATUS_WORD (High Byte),3,power_good_n,Bit = 0,Bit = 1,Never
+0x79,STATUS_WORD (High Byte),2,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x79,STATUS_WORD (High Byte),1,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x79,STATUS_WORD (High Byte),0,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7A,STATUS_VOUT,7,vout_ov_fault,Bit = 0,Bit = 1,Never
+0x7A,STATUS_VOUT,6,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7A,STATUS_VOUT,5,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7A,STATUS_VOUT,4,vout_uv_fault,Bit = 0,Bit = 1,Never
+0x7A,STATUS_VOUT,3,vout_max_warning,Bit = 0,Bit = 1,Never
+0x7A,STATUS_VOUT,2,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7A,STATUS_VOUT,1,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7A,STATUS_VOUT,0,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7B,STATUS_IOUT,7,iout_oc_fault,Bit = 0,Bit = 1,Never
+0x7B,STATUS_IOUT,6,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7B,STATUS_IOUT,5,iout_oc_warning,Bit = 0,Bit = 1,Never
+0x7B,STATUS_IOUT,4,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7B,STATUS_IOUT,3,current_share_fault,Bit = 0,Bit = 1,Never
+0x7B,STATUS_IOUT,2,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7B,STATUS_IOUT,1,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7B,STATUS_IOUT,0,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7C,STATUS_INPUT,7,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7C,STATUS_INPUT,6,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7C,STATUS_INPUT,5,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7C,STATUS_INPUT,4,vin_uv_fault,Bit = 0,Bit = 1,Never
+0x7C,STATUS_INPUT,3,unit_off_insuff_vin,Bit = 0,Bit = 1,Never
+0x7C,STATUS_INPUT,2,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7C,STATUS_INPUT,1,iin_oc_warning,Bit = 0,Bit = 1,Never
+0x7C,STATUS_INPUT,0,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7D,STATUS_TEMPERATURE,7,ot_fault,Bit = 0,Bit = 1,Never
+0x7D,STATUS_TEMPERATURE,6,ot_warning,Bit = 0,Bit = 1,Never
+0x7D,STATUS_TEMPERATURE,5,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7D,STATUS_TEMPERATURE,4,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7D,STATUS_TEMPERATURE,3,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7D,STATUS_TEMPERATURE,2,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7D,STATUS_TEMPERATURE,1,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7D,STATUS_TEMPERATURE,0,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7E,STATUS_CML,7,invalid_cmd,Bit = 0,Bit = 1,Never
+0x7E,STATUS_CML,6,invalid_data,Bit = 0,Bit = 1,Never
+0x7E,STATUS_CML,5,pec_failed,Bit = 0,Bit = 1,Never
+0x7E,STATUS_CML,4,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7E,STATUS_CML,3,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7E,STATUS_CML,2,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x7E,STATUS_CML,1,other_comm_fault,Bit = 0,Bit = 1,Never
+0x7E,STATUS_CML,0,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x80,STATUS_MFR_SPECIFIC,7,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x80,STATUS_MFR_SPECIFIC,6,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x80,STATUS_MFR_SPECIFIC,5,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x80,STATUS_MFR_SPECIFIC,4,unused,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0x80,STATUS_MFR_SPECIFIC,3,other_faults,Bit = 0,Bit = 1,Never
+0x80,STATUS_MFR_SPECIFIC,2,unprogrammed_rprog_fault,Bit = 0,Bit = 1,Never
+0x80,STATUS_MFR_SPECIFIC,1,user_config_max_rewrite_fault,Bit = 0,Bit = 1,Never
+0x80,STATUS_MFR_SPECIFIC,0,tsense_fault,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte0,7,rsel_fault,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte0,6,oen_filt,Bit = 1,Bit = 0,Never
+0xF9,STATUS_MONITOR Byte0,5,slave_fault,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte0,4,pwrgd,Bit = 1,Bit = 0,Never
+0xF9,STATUS_MONITOR Byte0,3,vddh_uvlob_fault,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte0,2,uvp,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte0,1,ovp,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte0,0,ocl,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte1,7,num_sl_det[4],Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte1,6,num_sl_det[3],Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte1,5,num_sl_det[2],Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte1,4,num_sl_det[1],Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte1,3,num_sl_det[0],Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte1,2,system_on,Bit = 1,Bit = 0,Never
+0xF9,STATUS_MONITOR Byte1,1,vout_max_fault,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte1,0,vr_settled,Bit = 1,Bit = 0,Never
+0xF9,STATUS_MONITOR Byte2,7,smaddr_fault,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte2,6,vrhot,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte2,5,isense2vdd_short,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte2,4,startup_waiting_for_pwm_fault,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte2,3,ot_fault,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte2,2,slave_population_fault,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte2,1,slave_flt_startup,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte2,0,pwm_open_fault,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte3,7,reserved,Never,Bit = 1 (unexpected),Bit = 0 (expected)
+0xF9,STATUS_MONITOR Byte3,6,tlvr_fault,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte3,5,wdog,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte3,4,vddh_uvlo_latch,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte3,3,sensep_open,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte3,2,ocp_warn_svi3,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte3,1,ecc_uncorr_err,Bit = 0,Bit = 1,Never
+0xF9,STATUS_MONITOR Byte3,0,ocp_fault_svi3,Bit = 0,Bit = 1,Never
