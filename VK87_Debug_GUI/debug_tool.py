@@ -954,6 +954,10 @@ class DebugToolApp:
                       hover_color="#cf6d17", font=("Segoe UI", 10),
                       command=self._svi3_set_vout).pack(side="left", padx=2)
 
+        ctk.CTkButton(row4, text="Set VID=0", width=80, height=28, fg_color="#e74c3c",
+                      hover_color="#c0392b", font=("Segoe UI", 10),
+                      command=self._svi3_set_vid_zero).pack(side="left", padx=(10, 2))
+
     def _svi3_reg_changed(self, selection):
         reg = int(selection.split()[0], 16)
         desc = self.svi3_desc.get(reg, "")
@@ -1121,6 +1125,16 @@ class DebugToolApp:
                 self._log(f"SVI3 Set VOUT  Rail {rail}  readback={vout:.4f} V  (raw=0x{raw:04X})")
         except Exception as e:
             self._log(f"SVI3 Set VOUT  Rail {rail}  readback ERROR: {e}")
+
+    def _svi3_set_vid_zero(self):
+        rail = self.svi3_rail_var.get()
+        addr = getattr(self.controller.svi3.address, rail)
+        self._wake_svi3_rail(rail)
+        try:
+            self.controller.svi3.set_output_voltage(code=0, address=addr)
+            self._log(f"SVI3 Set VID=0  Rail {rail}  address=0x{int(addr):02X}")
+        except Exception as e:
+            self._log(f"SVI3 Set VID=0  Rail {rail}  ERROR: {e}")
 
     # ======================================================================
     # Tab: Telemetry
