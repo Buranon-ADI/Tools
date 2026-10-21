@@ -144,7 +144,7 @@ FAULT_LOG_0xF7_BITS = [
 STATUS_MONITOR_0xF9 = {
     0: [
         (7, "rsel_fault"), (6, "oen_filt"), (5, "slave_fault"), (4, "pwrgd"),
-        (3, "vddh_uvlob_fault"), (2, "ocl_mincmp"), (1, "ocl_in"), (0, "ocp"),
+        (3, "vddh_uvlob_fault"), (2, "ocl_min"), (1, "ocl_cmp"), (0, "ocl"),
     ],
     1: [
         (7, "num_sl_det[4]"), (6, "num_sl_det[3]"), (5, "num_sl_det[2]"),
