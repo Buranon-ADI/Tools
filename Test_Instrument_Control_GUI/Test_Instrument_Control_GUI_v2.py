@@ -1256,6 +1256,27 @@ class MonitorGraphWindow:
         self.pause_btn.config(text="Resume" if self.paused else "Pause")
 
 
+WG_EDGE_MIN_NS   = 8.4
+WG_EDGE_MAX_NS   = 1000.0
+WG_EDGE_PW_RATIO = 0.625
+
+
+def calc_edge_time(high_mv: float, low_mv: float, ratio: float, sr_ka_us: float, pw_us: float | None = None) -> tuple[str, float]:
+    if ratio == 0 or sr_ka_us == 0:
+        raise ValueError
+    di_a = abs(high_mv - low_mv) / ratio
+    # 33500B edge time is 10%-90%; 1 kA/us == 1 A/ns
+    edge_ns = 0.8 * di_a / sr_ka_us
+    text = f"dI {di_a:.3f} A, Rise/Fall {edge_ns:.1f} ns"
+    if edge_ns < WG_EDGE_MIN_NS:
+        text += f"  [WARN < {WG_EDGE_MIN_NS} ns min]"
+    elif edge_ns > WG_EDGE_MAX_NS:
+        text += f"  [WARN > {WG_EDGE_MAX_NS:.0f} ns max]"
+    if pw_us and edge_ns > WG_EDGE_PW_RATIO * pw_us * 1000:
+        text += f"  [WARN > {WG_EDGE_PW_RATIO} x PW]"
+    return text, edge_ns
+
+
 class WaveformGeneratorWindow:
     """Standalone control window for Keysight 33500B series."""
 
@@ -1325,12 +1346,16 @@ class WaveformGeneratorWindow:
         self.freq_var = ttk.StringVar()
         self.pulse_width_var = ttk.StringVar()
         self.duty_cycle_var = ttk.StringVar()
+        self.rise_var = ttk.StringVar()
+        self.fall_var = ttk.StringVar()
 
         self.high_readback = ttk.StringVar(value="---")
         self.low_readback = ttk.StringVar(value="---")
         self.freq_readback = ttk.StringVar(value="---")
         self.pw_readback = ttk.StringVar(value="---")
         self.dc_readback = ttk.StringVar(value="---")
+        self.rise_readback = ttk.StringVar(value="---")
+        self.fall_readback = ttk.StringVar(value="---")
 
         params = [
             ("Voltage HIGH (mV):", self.high_var, "Send HIGH", self._send_high, self.high_readback),
@@ -1338,6 +1363,8 @@ class WaveformGeneratorWindow:
             ("Frequency (kHz):", self.freq_var, "Send Freq", self._send_frequency, self.freq_readback),
             ("Pulse Width (us):", self.pulse_width_var, "Send PW", self._send_pulse_width, self.pw_readback),
             ("Duty Cycle (%):", self.duty_cycle_var, "Send DC", self._send_duty_cycle, self.dc_readback),
+            ("Rise Time (ns):", self.rise_var, "Send Rise", self._send_rise, self.rise_readback),
+            ("Fall Time (ns):", self.fall_var, "Send Fall", self._send_fall, self.fall_readback),
         ]
 
         for row_idx, (label, var, btn_text, cmd, rb_var) in enumerate(params):
@@ -1391,6 +1418,14 @@ class WaveformGeneratorWindow:
 
         ttk.Button(row3, text="Calc Load Current", bootstyle="info", command=self._calculate_load_current).pack(side=LEFT, padx=(0, 8))
         ttk.Button(row3, text="Calc Voltage HIGH", bootstyle="info-outline", command=self._calculate_voltage_high).pack(side=LEFT)
+
+        row4 = ttk.Frame(calc_frame)
+        row4.pack(fill=X, pady=(6, 0))
+
+        ttk.Label(row4, text="Current SR (kA/us):").pack(side=LEFT)
+        self.calc_sr_var = ttk.StringVar()
+        ttk.Entry(row4, textvariable=self.calc_sr_var, width=10).pack(side=LEFT, padx=(4, 8))
+        ttk.Button(row4, text="Calc Rise/Fall", bootstyle="info", command=self._calculate_edge_time).pack(side=LEFT)
 
         # Result
         result_frame = ttk.Labelframe(body, text="Result", padding=10)
@@ -1453,12 +1488,18 @@ class WaveformGeneratorWindow:
             dc_cmd = "FUNC:SQU:DCYC?" if wtype == "SQU" else "FUNC:PULS:DCYC?"
             dc = float(self.inst.query(dc_cmd).strip())
             self.dc_readback.set(f"{dc:.2f} %")
+            rise = float(self.inst.query("FUNC:PULS:TRAN:LEAD?").strip())
+            self.rise_readback.set(f"{rise * 1e9:.1f} ns")
+            fall = float(self.inst.query("FUNC:PULS:TRAN:TRA?").strip())
+            self.fall_readback.set(f"{fall * 1e9:.1f} ns")
         except Exception as e:
             self.high_readback.set("Error")
             self.low_readback.set("Error")
             self.freq_readback.set("Error")
             self.pw_readback.set("Error")
             self.dc_readback.set("Error")
+            self.rise_readback.set("Error")
+            self.fall_readback.set("Error")
 
     def _send_high(self):
         val = self.high_var.get()
@@ -1494,6 +1535,18 @@ class WaveformGeneratorWindow:
             self._scpi_write(f"FUNC:SQU:DCYC {val}")
         else:
             self._scpi_write(f"FUNC:PULS:DCYC {val}")
+
+    def _send_rise(self):
+        val = self.rise_var.get()
+        if not val:
+            return
+        self._scpi_write(f"FUNC:PULS:TRAN:LEAD {val} E-9")
+
+    def _send_fall(self):
+        val = self.fall_var.get()
+        if not val:
+            return
+        self._scpi_write(f"FUNC:PULS:TRAN:TRA {val} E-9")
 
     def _output_on(self):
         self._scpi_write("OUTP ON")
@@ -1542,6 +1595,21 @@ class WaveformGeneratorWindow:
             self.result_var.set(f"Voltage HIGH = {voltage_high:.6f} mV")
         except ValueError:
             Messagebox.show_error("Enter valid numeric values (ratio != 0).", title="Error", parent=self.window)
+
+    def _calculate_edge_time(self):
+        try:
+            pw = self.pulse_width_var.get()
+            text, edge_ns = calc_edge_time(
+                float(self.high_var.get()), float(self.low_var.get()),
+                float(self.calc_ratio_var.get()), float(self.calc_sr_var.get()),
+                float(pw) if pw else None,
+            )
+        except ValueError:
+            Messagebox.show_error("Enter valid HIGH, LOW, Ratio and SR (ratio, SR != 0).", title="Error", parent=self.window)
+            return
+        self.rise_var.set(f"{edge_ns:.1f}")
+        self.fall_var.set(f"{edge_ns:.1f}")
+        self.result_var.set(text)
 
     def _on_close(self):
         if self.inst:
@@ -3764,6 +3832,22 @@ class QuickActionsWindow:
         ttk.Button(param_row, text="Set", bootstyle="primary", width=4, command=self._wg_send_freq).pack(side=LEFT, padx=(0, 8))
         ttk.Button(param_row, text="Read", bootstyle="info-outline", width=5, command=self._wg_read_params).pack(side=LEFT)
 
+        param_row2 = ttk.Frame(lf)
+        param_row2.pack(fill=X, pady=(0, 4))
+        ttk.Label(param_row2, text="", width=10).pack(side=LEFT)
+        ttk.Label(param_row2, text="LOW(mV):").pack(side=LEFT)
+        self.wg_low_var = ttk.StringVar()
+        ttk.Entry(param_row2, textvariable=self.wg_low_var, width=8).pack(side=LEFT, padx=(2, 4))
+        ttk.Button(param_row2, text="Set", bootstyle="primary", width=4, command=self._wg_send_low).pack(side=LEFT, padx=(0, 8))
+        ttk.Label(param_row2, text="Rise(ns):").pack(side=LEFT)
+        self.wg_rise_var = ttk.StringVar()
+        ttk.Entry(param_row2, textvariable=self.wg_rise_var, width=6).pack(side=LEFT, padx=(2, 4))
+        ttk.Button(param_row2, text="Set", bootstyle="primary", width=4, command=self._wg_send_rise).pack(side=LEFT, padx=(0, 8))
+        ttk.Label(param_row2, text="Fall(ns):").pack(side=LEFT)
+        self.wg_fall_var = ttk.StringVar()
+        ttk.Entry(param_row2, textvariable=self.wg_fall_var, width=8).pack(side=LEFT, padx=(2, 4))
+        ttk.Button(param_row2, text="Set", bootstyle="primary", width=4, command=self._wg_send_fall).pack(side=LEFT, padx=(0, 8))
+
         # Load Tool Calculation row
         calc_row = ttk.Frame(lf)
         calc_row.pack(fill=X, pady=(0, 2))
@@ -3777,6 +3861,16 @@ class QuickActionsWindow:
         ttk.Button(calc_row, text="Calc Load", bootstyle="info", width=9, command=self._wg_calc_load).pack(side=LEFT, padx=(0, 4))
         self.wg_calc_result = ttk.Label(calc_row, text="", font=("Consolas", 9), bootstyle="success")
         self.wg_calc_result.pack(side=LEFT, padx=(4, 0))
+
+        sr_row = ttk.Frame(lf)
+        sr_row.pack(fill=X, pady=(4, 2))
+        ttk.Label(sr_row, text="", width=10).pack(side=LEFT)
+        ttk.Label(sr_row, text="SR(kA/us):").pack(side=LEFT)
+        self.wg_calc_sr_var = ttk.StringVar()
+        ttk.Entry(sr_row, textvariable=self.wg_calc_sr_var, width=6).pack(side=LEFT, padx=(2, 4))
+        ttk.Button(sr_row, text="Calc Rise/Fall", bootstyle="info", width=12, command=self._wg_calc_edge).pack(side=LEFT, padx=(0, 4))
+        self.wg_calc_edge_result = ttk.Label(sr_row, text="", font=("Consolas", 9), bootstyle="success")
+        self.wg_calc_edge_result.pack(side=LEFT, padx=(4, 0))
 
     def _build_scope_section(self, parent):
         outer = ttk.LabelFrame(parent, text="Oscilloscope")
@@ -3918,6 +4012,29 @@ class QuickActionsWindow:
         except Exception as e:
             self._set_status(f"WG: {e}")
 
+    def _wg_write_value(self, var, cmd_fmt):
+        inst = self.instruments.get("waveform_generator")
+        if not inst:
+            self._set_status("waveform_generator: not connected")
+            return
+        val = var.get()
+        if not val:
+            return
+        try:
+            inst.write(cmd_fmt.format(val))
+            self._set_status("")
+        except Exception as e:
+            self._set_status(f"WG: {e}")
+
+    def _wg_send_low(self):
+        self._wg_write_value(self.wg_low_var, ":VOLT:LOW {} mV")
+
+    def _wg_send_rise(self):
+        self._wg_write_value(self.wg_rise_var, "FUNC:PULS:TRAN:LEAD {} E-9")
+
+    def _wg_send_fall(self):
+        self._wg_write_value(self.wg_fall_var, "FUNC:PULS:TRAN:TRA {} E-9")
+
     def _wg_read_params(self):
         inst = self.instruments.get("waveform_generator")
         if not inst:
@@ -3930,9 +4047,32 @@ class QuickActionsWindow:
             self.wg_dc_var.set(f"{dc:.2f}")
             freq = float(inst.query("FREQ?").strip())
             self.wg_freq_var.set(f"{freq / 1000:.4f}")
+            low = float(inst.query("VOLT:LOW?").strip())
+            self.wg_low_var.set(f"{low * 1000:.2f}")
+            rise = float(inst.query("FUNC:PULS:TRAN:LEAD?").strip())
+            self.wg_rise_var.set(f"{rise * 1e9:.1f}")
+            fall = float(inst.query("FUNC:PULS:TRAN:TRA?").strip())
+            self.wg_fall_var.set(f"{fall * 1e9:.1f}")
             self._set_status("")
         except Exception as e:
             self._set_status(f"WG read: {e}")
+
+    def _wg_calc_edge(self):
+        try:
+            dc, freq = self.wg_dc_var.get(), self.wg_freq_var.get()
+            pw_us = float(dc) / 100 / float(freq) * 1000 if dc and freq and float(freq) else None
+            text, edge_ns = calc_edge_time(
+                float(self.wg_high_var.get()), float(self.wg_low_var.get()),
+                float(self.wg_calc_ratio_var.get()), float(self.wg_calc_sr_var.get()),
+                pw_us,
+            )
+        except ValueError:
+            self._set_status("Invalid HIGH/LOW/Ratio/SR (ratio, SR != 0)")
+            return
+        self.wg_rise_var.set(f"{edge_ns:.1f}")
+        self.wg_fall_var.set(f"{edge_ns:.1f}")
+        self.wg_calc_edge_result.config(text=text)
+        self._set_status("")
 
     def _wg_calc_load(self):
         try:
