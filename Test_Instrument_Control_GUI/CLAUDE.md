@@ -165,6 +165,7 @@ A rewrite using ttkbootstrap (darkly theme) with a multi-window design instead o
 - Each device window is self-contained with its own SCPI helpers (`_scpi_write`/`_scpi_query`)
 - Threaded operations for anything with delays (toggle output)
 - `time` import is local inside `_toggle_thread` to keep module-level imports clean
+- **PLZ664WA USB hang**: the load can wedge inside NI-VISA (ignores VISA timeout) after a session is closed with an unread reply or after `clear()`. Never call `clear()` on it. `DeviceDetector` probes each resource in a thread (`PROBE_TIMEOUT_S` = 6) and lists hung ones in a warning; `ElectronicLoadWindow._connect` runs in a thread (`CONNECT_TIMEOUT_S` = 6), retries fast errors only (`CONNECT_RETRIES` = 2, `RETRY_DELAY_MS` = 1000), never retries a timeout; `_shutdown` (Disconnect/close) waits for a running toggle, sends `:INP OFF`, then closes
 
 ### Oscilloscope — Channel Labels Tab
 - Scope window uses a `ttk.Notebook` with two tabs: "Controls" (all existing controls) and "Channel Labels"
@@ -177,20 +178,25 @@ A rewrite using ttkbootstrap (darkly theme) with a multi-window design instead o
 - SCPI commands use raw channel ID extracted via `_get_channel_id()`
 - Status label (`lbl_status`) at bottom of Channel Labels tab for feedback
 
-### Quick Actions Window
+### Quick Actions Window (titled "Frequent Use")
 - **Standalone window** with own VISA connections — does not depend on individual device windows
-- Launched from DetectSummaryWindow ("Quick Actions" button) or main window
+- Launched from DetectSummaryWindow ("Frequent Use" button) or main window; class name is still `QuickActionsWindow`
 - Receives `rm` (shared ResourceManager) and `detected` dict from `InstrumentGUIv2`
 - **Connect All / Disconnect All** buttons; per-device status dots (green=connected, red=not)
 - Connect All auto-reads all settings (V/I entries, waveform params) and runs initial readback
 - `self.instruments` dict keyed by device name holds own VISA handles
 
-#### Layout (side-by-side Power Control + stacked sections)
-- **Power Control**: N8734A (left card) and E36311A (right card) side-by-side
-  - N8734A: V/I readback, CV/CC LEDs, V/I set entries, ON/OFF/Clear+OFF/Graph buttons
-  - E36311A: Ch1/Ch2 each with V/I readback, V/I set entries, Set/Read/ON/OFF buttons
-  - Shared: Auto Readback toggle + interval + Read All Now
-- **Waveform Generator**: ON/OFF, toggle with delay entry, HIGH(mV)/DC(%)/Freq(kHz) set+read, load current calculator
+#### Layout (single column, compact, scrollable)
+- Fixed top: row 1 Connect All / Disconnect All, row 2 status dots; fixed bottom: status label
+- Middle (Power Control, Waveform Generator, Oscilloscope) is a canvas + scrollbar (`_build_scroll_area`); mousewheel bound on the Toplevel only
+- `_fit_window` sizes the window to `HEIGHT_SCALE` (0.7) of full content height
+- `_compact()` runs after build: fonts to `FONT_SIZE` (7), button padding `BTN_PADDING`, frame/pack/grid padding x `PAD_SCALE`. Uses derived `QA.*` styles so other windows are unaffected
+- **Power Control**: N8734A card stacked above E36311A card
+  - N8734A: V/I readback, CV/CC LEDs + Readback button, V/I set entries, Read/ON/OFF/Clr+OFF/Graph buttons
+  - E36311A: Ch1/Ch2 each with V/I readback, V/I set entries, Set/Read/ON/OFF buttons; Readback button at bottom
+  - Read All Now (own row), then Auto Readback toggle + interval
+  - Readback buttons (`_readback_n8734a`, `_readback_e36`) = measurements + output LEDs for one device; "Read" buttons = setpoints into entries
+- **Waveform Generator**: ON/OFF/Delay/Toggle row; params in grid, 2 per row (HIGH/LOW, DC/Freq, Rise/Fall); load calc row; SR row with Calc Rise/Fall + Read (`_readback_wg` = params + output LED)
 - **Oscilloscope**: RUN/STOP/SINGLE/Sequence, trigger Auto/Normal, remote access (Get IP / Open Browser)
 
 #### SCPI Commands (direct, not via device windows)
@@ -221,7 +227,11 @@ A rewrite using ttkbootstrap (darkly theme) with a multi-window design instead o
 - Two subplots: voltage (teal `#00d4aa`) on top, current (orange `#ff9f43`) on bottom
 - Data source: `monitor_history` dict (time/voltage/current lists) appended in `_update_readback`
 - Rolling buffer: 300 points max
-- Controls: "Clear" (resets history), "Pause/Resume" (toggles graph updates)
+- Controls: "Clear" (resets history + max hold), "Pause/Resume" (toggles graph updates)
+- **Max current**: stats line `Now | Max | Min | Avg | Hold`; dashed line + dot + label at max sample; `hold_max` survives buffer roll-off (Reset Max / Clear)
+- On open, `MonitorGraphWindow(parent, history, inst)` reads `CURR?` into Limit(A) and `CURR:PROT:STAT?` into the OCP label (skipped if `inst` is None)
+- **Limit(A)** entry (default 2.0 if not read, blank = off): red line, y-axis extended to include it, `Over: x.x s` accumulates time above limit; hold/over tracking continues while paused
+- Max is of polled `MEAS:CURR?` averages -- fast WG load pulses are not captured
 - Requires `matplotlib` (shows error if missing)
 - Graph auto-updates each time `_update_readback` runs (tied to auto-readback interval)
 

@@ -1,6 +1,7 @@
 import os
 import sys
 import threading
+import tkinter.font as tkfont
 from datetime import datetime
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
@@ -9,27 +10,44 @@ import pyvisa
 
 
 class DeviceDetector:
+    # A wedged USBTMC device (seen on PLZ664WA) blocks inside NI-VISA and ignores the VISA timeout,
+    # so each probe runs in its own thread and is abandoned after this many seconds.
+    PROBE_TIMEOUT_S = 6
+
     def __init__(self, rm, resources, config):
         self.rm = rm
         self.resources = resources
         self.config = config
         self.detected = {}
+        self.hung = []
+
+    def _probe(self, resource, out):
+        try:
+            with self.rm.open_resource(resource) as inst:
+                inst.timeout = 3000
+                out["idn"] = inst.query("*IDN?").strip()
+        except Exception:
+            pass
 
     def scan(self, progress_callback=None):
         total = len(self.resources)
         for i, resource in enumerate(self.resources):
             if progress_callback:
                 progress_callback(i, total, resource)
-            try:
-                with self.rm.open_resource(resource) as inst:
-                    inst.timeout = 3000
-                    idn = inst.query("*IDN?").strip()
-                    idn_fields = [f.strip().upper() for f in idn.split(",")]
-                    for tab_name, keyword in self.config.items():
-                        if keyword.upper() in idn_fields:
-                            self.detected[tab_name] = (resource, idn)
-            except Exception:
-                pass
+            out = {}
+            probe = threading.Thread(target=self._probe, args=(resource, out), daemon=True)
+            probe.start()
+            probe.join(self.PROBE_TIMEOUT_S)
+            if probe.is_alive():
+                self.hung.append(resource)
+                continue
+            idn = out.get("idn")
+            if not idn:
+                continue
+            idn_fields = [f.strip().upper() for f in idn.split(",")]
+            for tab_name, keyword in self.config.items():
+                if keyword.upper() in idn_fields:
+                    self.detected[tab_name] = (resource, idn)
         if progress_callback:
             progress_callback(total, total, "")
         return self.detected
@@ -84,7 +102,7 @@ class DetectProgressWindow:
     def _run_scan(self, detector):
         detector.scan(progress_callback=self._on_progress)
         self.detected = detector.detected
-        self.window.after(0, self._on_complete)
+        self.window.after(0, self._on_complete, detector.hung)
 
     def _on_progress(self, current, total, resource):
         self.window.after(0, self._update_ui, current, total, resource)
@@ -98,7 +116,14 @@ class DetectProgressWindow:
         else:
             self.status_label.config(text="Done.")
 
-    def _on_complete(self):
+    def _on_complete(self, hung):
+        if hung:
+            Messagebox.show_warning(
+                "No response within {} s (skipped):\n\n{}\n\n"
+                "Replug USB or power-cycle the instrument, then Rescan.".format(
+                    DeviceDetector.PROBE_TIMEOUT_S, "\n".join(hung)),
+                title="Instrument not responding", parent=self.window,
+            )
         self.window.destroy()
 
     def _center_window(self, win, w, h):
@@ -199,7 +224,7 @@ class DetectSummaryWindow:
 
         if self.on_open_quick_actions:
             ttk.Button(
-                btn_frame, text="Quick Actions",
+                btn_frame, text="Frequent Use",
                 bootstyle="success",
                 command=self.on_open_quick_actions
             ).pack(side=RIGHT, padx=(0, 8))
@@ -1146,7 +1171,7 @@ class HighPowerSupplyWindow:
         if self.monitor_window and self.monitor_window.is_alive():
             self.monitor_window.window.lift()
             return
-        self.monitor_window = MonitorGraphWindow(self.window, self.monitor_history)
+        self.monitor_window = MonitorGraphWindow(self.window, self.monitor_history, self.inst)
 
     def _on_close(self):
         self._disconnect()
@@ -1158,7 +1183,7 @@ class HighPowerSupplyWindow:
 class MonitorGraphWindow:
     """Real-time voltage/current graph for N8734A."""
 
-    def __init__(self, parent, history):
+    def __init__(self, parent, history, inst=None):
         try:
             import matplotlib
             matplotlib.use("TkAgg")
@@ -1173,6 +1198,9 @@ class MonitorGraphWindow:
 
         self.history = history
         self.paused = False
+        self.hold_max  = None
+        self.over_time = 0.0
+        self.last_t    = None
 
         self.window = ttk.Toplevel(parent)
         self.window.title("N8734A Monitor Graph")
@@ -1184,6 +1212,23 @@ class MonitorGraphWindow:
         ttk.Button(toolbar, text="Clear", bootstyle="warning-outline", command=self._clear).pack(side=LEFT, padx=(0, 8))
         self.pause_btn = ttk.Button(toolbar, text="Pause", bootstyle="secondary-outline", command=self._toggle_pause)
         self.pause_btn.pack(side=LEFT)
+
+        stats_row = ttk.Frame(self.window, padding=(8, 0, 8, 4))
+        stats_row.pack(fill=X)
+        self.stats_label = ttk.Label(stats_row, text="", font=("Consolas", 9))
+        self.stats_label.pack(side=LEFT)
+
+        limit_row = ttk.Frame(self.window, padding=(8, 0, 8, 4))
+        limit_row.pack(fill=X)
+        ttk.Label(limit_row, text="Limit(A):").pack(side=LEFT, padx=(0, 2))
+        self.limit_var = ttk.StringVar(value="2.0")
+        ttk.Entry(limit_row, textvariable=self.limit_var, width=6).pack(side=LEFT, padx=(0, 8))
+        self.over_label = ttk.Label(limit_row, text="", font=("Consolas", 9))
+        self.over_label.pack(side=LEFT, padx=(0, 8))
+        ttk.Button(limit_row, text="Reset Max", bootstyle="info-outline", command=self._reset_max).pack(side=LEFT, padx=(0, 8))
+        self.ocp_label = ttk.Label(limit_row, text="OCP: --", font=("Consolas", 9))
+        self.ocp_label.pack(side=LEFT)
+        self._read_limit(inst)
 
         self.fig = Figure(figsize=(8, 4), dpi=100)
         self.fig.set_facecolor("#2b2b2b")
@@ -1207,11 +1252,17 @@ class MonitorGraphWindow:
         self.line_v, = self.ax_v.plot([], [], color="#00d4aa", linewidth=1.2)
         self.line_i, = self.ax_i.plot([], [], color="#ff9f43", linewidth=1.2)
 
+        self.max_line   = self.ax_i.axhline(0, color="#ff9f43", linestyle="--", linewidth=0.8, alpha=0.7, visible=False)
+        self.limit_line = self.ax_i.axhline(0, color="#ff4757", linewidth=1.0, visible=False)
+        self.max_dot,   = self.ax_i.plot([], [], "o", color="#ff4757", markersize=5)
+        self.max_text   = self.ax_i.annotate("", xy=(0, 0), xytext=(6, 6), textcoords="offset points", color="white", fontsize=8)
+
         self.fig.tight_layout(pad=2.0)
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.window)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
         self.canvas.draw()
+        self.update_plot()
 
     def is_alive(self):
         try:
@@ -1219,12 +1270,42 @@ class MonitorGraphWindow:
         except Exception:
             return False
 
+    def _read_limit(self, inst):
+        if inst is None:
+            return
+        try:
+            self.limit_var.set(f"{float(inst.query('CURR?').strip()):.3f}")
+            ocp_on = inst.query("CURR:PROT:STAT?").strip() == "1"
+            self.ocp_label.config(text=f"OCP: {'ON' if ocp_on else 'OFF'}", foreground="#00d4aa" if ocp_on else "gray")
+        except Exception:
+            self.ocp_label.config(text="OCP: read error", foreground="#ff4757")
+
+    def _limit(self):
+        try:
+            return float(self.limit_var.get())
+        except ValueError:
+            return None
+
+    # Hold max and over-limit time keep accumulating while paused and after samples leave the rolling buffer.
+    def _track(self, t, i, limit):
+        if i:
+            self.hold_max = max(i) if self.hold_max is None else max(self.hold_max, max(i))
+        if limit is not None:
+            for k in range(1, len(t)):
+                if (self.last_t is None or t[k] > self.last_t) and i[k] > limit:
+                    self.over_time += t[k] - t[k - 1]
+        self.last_t = t[-1] if t else None
+
     def update_plot(self):
-        if self.paused or not self.is_alive():
+        if not self.is_alive():
             return
         t = self.history["time"]
         v = self.history["voltage"]
         i = self.history["current"]
+        limit = self._limit()
+        self._track(t, i, limit)
+        if self.paused:
+            return
 
         self.line_v.set_data(t, v)
         self.line_i.set_data(t, i)
@@ -1241,7 +1322,45 @@ class MonitorGraphWindow:
             margin = max((imax - imin) * 0.1, 0.01)
             self.ax_i.set_ylim(imin - margin, imax + margin)
 
+        if i:
+            imax = max(i)
+            k = i.index(imax)
+            self.stats_label.config(
+                text=f"Now {i[-1]:.3f} A | Max {imax:.3f} A | Min {min(i):.3f} A | Avg {sum(i) / len(i):.3f} A | Hold {self.hold_max:.3f} A",
+                foreground="#ff4757" if limit is not None and self.hold_max > limit else "",
+            )
+            self.max_line.set_ydata([imax, imax])
+            self.max_line.set_visible(True)
+            self.max_dot.set_data([t[k]], [imax])
+            right_half = t[-1] > t[0] and (t[k] - t[0]) / (t[-1] - t[0]) > 0.5
+            self.max_text.xy = (t[k], imax)
+            self.max_text.set_horizontalalignment("right" if right_half else "left")
+            self.max_text.set_position((-6 if right_half else 6, 6))
+            self.max_text.set_text(f"Max {imax:.3f} A @ {t[k]:.1f} s")
+        else:
+            self.stats_label.config(text="Now -- | Max -- | Min -- | Avg -- | Hold --", foreground="")
+            self.max_line.set_visible(False)
+            self.max_dot.set_data([], [])
+            self.max_text.set_text("")
+
+        if limit is not None:
+            self.limit_line.set_ydata([limit, limit])
+            self.limit_line.set_visible(True)
+            lo, hi = self.ax_i.get_ylim()
+            if not lo < limit < hi:
+                lo, hi = min(lo, limit), max(hi, limit)
+                margin = max((hi - lo) * 0.05, 0.01)
+                self.ax_i.set_ylim(lo - margin, hi + margin)
+        else:
+            self.limit_line.set_visible(False)
+        self.over_label.config(text=f"Over: {self.over_time:.1f} s", foreground="#ff4757" if self.over_time else "")
+
         self.canvas.draw_idle()
+
+    def _reset_max(self):
+        self.hold_max  = None
+        self.over_time = 0.0
+        self.update_plot()
 
     def _clear(self):
         self.history["time"].clear()
@@ -1249,7 +1368,7 @@ class MonitorGraphWindow:
         self.history["current"].clear()
         self.line_v.set_data([], [])
         self.line_i.set_data([], [])
-        self.canvas.draw_idle()
+        self._reset_max()
 
     def _toggle_pause(self):
         self.paused = not self.paused
@@ -1259,6 +1378,28 @@ class MonitorGraphWindow:
 WG_EDGE_MIN_NS   = 8.4
 WG_EDGE_MAX_NS   = 1000.0
 WG_EDGE_PW_RATIO = 0.625
+
+
+# D0 (PWM_1) at top down to D15 (PWM_16); SMA-height slot positions read back from 16PWM.csv
+PWM16_DIGITAL_POS = [3.90, 3.76, 3.64, 3.52, 3.40, 3.26, 3.14, 3.02, 2.90, 2.76, 2.64, 2.52, 2.40, 2.26, 2.14, 2.02]
+
+
+def arrange_16pwm(inst) -> str:
+    inst.write("DISplay:DIGital:HEIght SMA")
+    for d, pos in enumerate(PWM16_DIGITAL_POS):
+        inst.write(f"SELect:D{d} 1")
+        inst.write(f"D{d}:POSition {pos}")
+        inst.write(f'D{d}:LABel "PWM_{d + 1}"')
+    inst.query("*OPC?")
+    bad = [f"D{d}" for d, pos in enumerate(PWM16_DIGITAL_POS) if round(float(inst.query(f"D{d}:POSition?")), 2) != pos]
+    return "Arrange 16 PWM: PASS" if not bad else f"Arrange 16 PWM: FAIL ({', '.join(bad)} out of place)"
+
+
+# MDO34 snaps Dx:POSition to the slot grid of the current digital height and swaps channels
+# that land on the same slot, so the height must be applied before any digital position.
+def order_scope_settings(settings: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    first = [kv for kv in settings if kv[0].upper().startswith("DISPLAY:DIGITAL:")]
+    return first + [kv for kv in settings if kv not in first]
 
 
 def calc_edge_time(high_mv: float, low_mv: float, ratio: float, sr_ka_us: float, pw_us: float | None = None) -> tuple[str, float]:
@@ -1894,7 +2035,8 @@ class OscilloscopeWindow:
         dig_btn_row = ttk.Frame(digital_frame)
         dig_btn_row.pack(anchor=W, pady=(6, 0))
         ttk.Button(dig_btn_row, text="Read Digital Labels", bootstyle="info-outline", command=self._read_digital_labels).pack(side=LEFT, padx=(0, 8))
-        ttk.Button(dig_btn_row, text="Apply All Digital Labels", bootstyle="success-outline", command=self._apply_digital_labels).pack(side=LEFT)
+        ttk.Button(dig_btn_row, text="Apply All Digital Labels", bootstyle="success-outline", command=self._apply_digital_labels).pack(side=LEFT, padx=(0, 8))
+        ttk.Button(dig_btn_row, text="Arrange 16 PWM", bootstyle="warning-outline", command=self._arrange_16pwm).pack(side=LEFT)
 
         # Reference Channels
         ref_label_frame = ttk.Labelframe(lbl_body, text="Reference Channels", padding=10)
@@ -2121,7 +2263,7 @@ class OscilloscopeWindow:
         try:
             with open(filepath, "r") as f:
                 reader = csv.DictReader(f)
-                settings = [(row["command"], row["value"]) for row in reader]
+                settings = order_scope_settings([(row["command"], row["value"]) for row in reader])
         except Exception as e:
             Messagebox.show_error(f"Failed to read file:\n{e}", title="MDO34", parent=self.window)
             return
@@ -2227,6 +2369,30 @@ class OscilloscopeWindow:
             self._set_lbl_status(f"Analog read done (failed: {', '.join(errors)})")
         else:
             self._set_lbl_status("Analog labels read OK")
+
+    def _arrange_16pwm(self):
+        if not self.inst:
+            Messagebox.show_error("Not connected.", title="MDO34", parent=self.window)
+            return
+        inst = self.inst
+        self._set_lbl_status("Arranging D0-D15 as PWM_1-PWM_16...")
+
+        def _do():
+            try:
+                msg = arrange_16pwm(inst)
+            except Exception as e:
+                err = f"Arrange 16 PWM error: {e}"
+                self.window.after(0, lambda: self._set_lbl_status(err))
+                return
+            self.window.after(0, lambda: self._arrange_16pwm_done(msg))
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _arrange_16pwm_done(self, msg):
+        for d in range(16):
+            self.ch_labels[f"D{d}"].set(f"PWM_{d + 1}")
+        self._apply_channel_labels()
+        self._set_lbl_status(msg)
 
     def _read_digital_labels(self):
         """Read digital channel labels (D0-15) from scope."""
@@ -2553,7 +2719,7 @@ class OscilloscopeWindow:
                    f"Vrange: {meas['v_min']:.4f}-{meas['v_max']:.4f} V")
             self.window.after(0, lambda: self._rise_result(msg))
         except Exception as e:
-            self.window.after(0, lambda: self._rise_result(f"Error: {e}"))
+            self.window.after(0, lambda msg=f"Error: {e}": self._rise_result(msg))
 
     def _place_edge_cursors(self):
         if not self.inst:
@@ -2627,7 +2793,7 @@ class OscilloscopeWindow:
                    f"Slew={slew_rate:.2f} mV/us")
             self.window.after(0, lambda: self._rise_result(msg))
         except Exception as e:
-            self.window.after(0, lambda: self._rise_result(f"Error: {e}"))
+            self.window.after(0, lambda msg=f"Error: {e}": self._rise_result(msg))
 
     def _rise_result(self, text):
         self.rise_result_label.config(text=text)
@@ -2689,6 +2855,10 @@ class OscilloscopeWindow:
 class ElectronicLoadWindow:
     """Standalone control window for KIKUSUI PLZ664WA electronic load."""
 
+    CONNECT_TIMEOUT_S = 6
+    CONNECT_RETRIES   = 2
+    RETRY_DELAY_MS    = 1000
+
     def __init__(self, parent, rm, resource, idn):
         self.rm = rm
         self.resource = resource
@@ -2696,6 +2866,8 @@ class ElectronicLoadWindow:
         self.inst = None
         self.auto_readback_active = False
         self.after_id = None
+        self.stop_evt = threading.Event()
+        self.toggle_thread = None
 
         self.window = ttk.Toplevel(parent)
         self.window.title("Electronic Load -- PLZ664WA")
@@ -2814,31 +2986,95 @@ class ElectronicLoadWindow:
         self.status_label = ttk.Label(body, text="", font=("Segoe UI", 9), bootstyle="secondary")
         self.status_label.pack(anchor=W, pady=(4, 0))
 
-    def _connect(self):
-        try:
-            self.inst = self.rm.open_resource(self.resource)
-            self.inst.timeout = 3000
-            self.inst.query("*IDN?")
-            self.connect_btn.config(state=DISABLED)
+    # PLZ664WA can wedge inside NI-VISA (ignores the VISA timeout), so connect runs in a
+    # worker thread and is abandoned after CONNECT_TIMEOUT_S instead of freezing the GUI.
+    def _connect(self, retry=0):
+        import time
+        if not self.window.winfo_exists():
+            return
+        self.connect_btn.config(state=DISABLED)
+        status = f"Retrying ({retry}/{self.CONNECT_RETRIES})..." if retry else "Connecting..."
+        self.conn_status.config(text=status, bootstyle="warning")
+        self.stop_evt.clear()
+        attempt = {"retry": retry, "inst": None, "error": None, "done": False, "abandoned": False, "lock": threading.Lock()}
+
+        def _open():
+            inst, error = None, None
+            try:
+                inst = self.rm.open_resource(self.resource)
+                inst.timeout = 3000
+                inst.query("*IDN?")
+            except Exception as e:
+                error = e
+            with attempt["lock"]:
+                attempt["inst"], attempt["error"], attempt["done"] = inst, error, True
+                abandoned = attempt["abandoned"]
+            if abandoned and inst:
+                inst.close()
+
+        threading.Thread(target=_open, daemon=True).start()
+        self._poll_connect(attempt, time.monotonic() + self.CONNECT_TIMEOUT_S)
+
+    def _poll_connect(self, attempt, deadline):
+        import time
+        with attempt["lock"]:
+            done = attempt["done"]
+            if not done and (time.monotonic() >= deadline or not self.window.winfo_exists()):
+                attempt["abandoned"] = True
+        if not self.window.winfo_exists():
+            return
+        if not done and not attempt["abandoned"]:
+            self.window.after(100, self._poll_connect, attempt, deadline)
+            return
+        if done and attempt["error"] is None:
+            self.inst = attempt["inst"]
             self.disconnect_btn.config(state=NORMAL)
             self.conn_status.config(text="Connected", bootstyle="success")
-        except Exception as e:
-            Messagebox.show_error(f"Failed to connect:\n{e}", title="PLZ664WA", parent=self.window)
-            self.inst = None
+            return
+        # Retry only fast errors; a timeout means the device is wedged and retrying just stacks stuck threads.
+        if done and attempt["retry"] < self.CONNECT_RETRIES:
+            self.window.after(self.RETRY_DELAY_MS, self._connect, attempt["retry"] + 1)
+            return
+        self.connect_btn.config(state=NORMAL)
+        self.conn_status.config(text="Not responding" if not done else "Disconnected", bootstyle="danger")
+        if done:
+            Messagebox.show_error(f"Failed to connect after {attempt['retry'] + 1} attempts:\n{attempt['error']}", title="PLZ664WA", parent=self.window)
+        else:
+            Messagebox.show_error(
+                f"PLZ664WA did not respond within {self.CONNECT_TIMEOUT_S} s.\n\n"
+                "Replug USB or power-cycle the load, then Connect again.",
+                title="PLZ664WA", parent=self.window,
+            )
 
-    def _disconnect(self):
+    # Never close the session with a toggle mid-flight: stop readback, let the toggle thread
+    # finish its INP OFF, then force INP OFF and close.
+    def _shutdown(self, then):
         self.auto_readback_active = False
         if self.after_id:
             self.window.after_cancel(self.after_id)
             self.after_id = None
+        self.stop_evt.set()
+        if self.toggle_thread and self.toggle_thread.is_alive():
+            self.window.after(50, self._shutdown, then)
+            return
         if self.inst:
+            try:
+                self.inst.write(":INP OFF")
+            except Exception:
+                pass
             try:
                 self.inst.close()
             except Exception:
                 pass
             self.inst = None
-        self.connect_btn.config(state=NORMAL)
+        then()
+
+    def _disconnect(self):
         self.disconnect_btn.config(state=DISABLED)
+        self._shutdown(self._after_disconnect)
+
+    def _after_disconnect(self):
+        self.connect_btn.config(state=NORMAL)
         self.conn_status.config(text="Disconnected", bootstyle="danger")
 
     def _scpi_write(self, cmd):
@@ -2924,11 +3160,15 @@ class ElectronicLoadWindow:
         except ValueError:
             self._set_status("Delay must be numeric.", "danger")
             return
-        threading.Thread(target=self._toggle_thread, args=(delay,), daemon=True).start()
+        if self.toggle_thread and self.toggle_thread.is_alive():
+            self._set_status("Toggle already running.", "danger")
+            return
+        self.toggle_thread = threading.Thread(target=self._toggle_thread, args=(delay,), daemon=True)
+        self.toggle_thread.start()
 
     def _toggle_thread(self, delay):
-        import time
-        if not self.inst:
+        inst = self.inst
+        if not inst:
             self.window.after(0, lambda: self._set_status("Not connected.", "danger"))
             return
         try:
@@ -2936,17 +3176,18 @@ class ElectronicLoadWindow:
         except ValueError:
             threshold = 0.1
         try:
-            voltage = float(self.inst.query(":MEAS:VOLT?"))
+            voltage = float(inst.query(":MEAS:VOLT?"))
             if voltage < threshold:
                 self.window.after(0, lambda: self._set_status(
                     f"Blocked: voltage {voltage:.4f} V < {threshold} V threshold", "danger"))
                 return
-            self.inst.write(":INP ON")
-            time.sleep(delay)
-            self.inst.write(":INP OFF")
-            self.window.after(0, lambda: self._set_status("Toggle complete (ON -> OFF)", "success"))
+            inst.write(":INP ON")
+            self.stop_evt.wait(delay)
+            inst.write(":INP OFF")
+            if not self.stop_evt.is_set():
+                self.window.after(0, lambda: self._set_status("Toggle complete (ON -> OFF)", "success"))
         except Exception as e:
-            self.window.after(0, lambda: self._set_status(f"Error: {e}", "danger"))
+            self.window.after(0, lambda msg=f"Error: {e}": self._set_status(msg, "danger"))
 
     def _update_readback(self):
         try:
@@ -2984,15 +3225,7 @@ class ElectronicLoadWindow:
         self.after_id = self.window.after(interval, lambda: self._auto_readback_loop(interval))
 
     def _on_close(self):
-        self.auto_readback_active = False
-        if self.after_id:
-            self.window.after_cancel(self.after_id)
-        if self.inst:
-            try:
-                self.inst.close()
-            except Exception:
-                pass
-        self.window.destroy()
+        self._shutdown(self.window.destroy)
 
 
 class DAQWindow:
@@ -3214,7 +3447,7 @@ class DAQWindow:
             ctype3 = self.inst.query("SYSTem:CTYPe? 3").strip()
             self.window.after(0, lambda: self._apply_module_states(ctype1, ctype2, ctype3))
         except Exception as e:
-            self.window.after(0, lambda: self._set_status(f"Module check error: {e}"))
+            self.window.after(0, lambda msg=f"Module check error: {e}": self._set_status(msg))
 
     def _parse_model(self, ctype):
         parts = [p.strip() for p in ctype.split(",")]
@@ -3259,7 +3492,7 @@ class DAQWindow:
             self.window.after(0, lambda: self._set_status(
                 f"Ch{ch}: avg={stats['avg']:.6f} std={stats['std']:.6f} min={stats['min']:.6f} max={stats['max']:.6f}"))
         except Exception as e:
-            self.window.after(0, lambda: self._set_status(f"Ch{ch} ERROR: {e}"))
+            self.window.after(0, lambda msg=f"Ch{ch} ERROR: {e}": self._set_status(msg))
 
     def _acquire_all_slot(self, slot_num):
         channels = [slot_num * 100 + i for i in range(1, 5)]
@@ -3277,7 +3510,7 @@ class DAQWindow:
                 lines.append(f"Ch{ch}: avg={stats['avg']:.6f} std={stats['std']:.6f}")
             self.window.after(0, lambda: self._set_status(" | ".join(lines)))
         except Exception as e:
-            self.window.after(0, lambda: self._set_status(f"Acquire slot ERROR: {e}"))
+            self.window.after(0, lambda msg=f"Acquire slot ERROR: {e}": self._set_status(msg))
 
     def _init_slot(self, slot_num):
         if not self.inst:
@@ -3392,7 +3625,7 @@ class DAQWindow:
                     lines.append(f"Ch{ch}={stats['avg']:.4f}V")
             self.window.after(0, lambda: self._set_status(" | ".join(lines)))
         except Exception as e:
-            self.window.after(0, lambda: self._set_status(f"Auto-acquire ERROR: {e}"))
+            self.window.after(0, lambda msg=f"Auto-acquire ERROR: {e}": self._set_status(msg))
         finally:
             if self.auto_acquire_active:
                 self.after_id = self.window.after(interval, lambda: self._auto_acquire_loop(interval))
@@ -3578,6 +3811,10 @@ class QuickActionsWindow:
         "waveform_generator": 3000,
         "oscilloscope": 3000,
     }
+    FONT_SIZE    = 7
+    BTN_PADDING  = (4, 1)
+    PAD_SCALE    = 0.5
+    HEIGHT_SCALE = 0.7
 
     def __init__(self, parent, rm, detected):
         self.parent = parent
@@ -3592,36 +3829,116 @@ class QuickActionsWindow:
         self.fast_poll_active = False
 
         self.window = ttk.Toplevel(parent)
-        self.window.title("Quick Actions")
-        self.window.geometry("720x720")
+        self.window.title("Frequent Use")
         self.window.resizable(True, True)
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._center_window(self.window, 720, 720)
 
         main = ttk.Frame(self.window, padding=12)
         main.pack(fill=BOTH, expand=True)
 
         self._build_connection_bar(main)
-        self._build_power_control(main)
-        self._build_waveform_section(main)
-        self._build_scope_section(main)
+        body = self._build_scroll_area(main)
+        self._build_power_control(body)
+        self._build_waveform_section(body)
+        self._build_scope_section(body)
 
         self.status_label = ttk.Label(main, text="", font=("Segoe UI", 9))
         self.status_label.pack(anchor=W, pady=(8, 0))
 
+        self._compact()
+        self._fit_window()
+
+    def _build_scroll_area(self, parent):
+        area = ttk.Frame(parent)
+        area.pack(fill=BOTH, expand=True)
+        bg = ttk.Style.get_instance().lookup("TFrame", "background")
+        self._canvas = ttk.Canvas(area, highlightthickness=0, background=bg)
+        sb = ttk.Scrollbar(area, orient=VERTICAL, command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side=RIGHT, fill=Y)
+        self._canvas.pack(side=LEFT, fill=BOTH, expand=True)
+        self._body = ttk.Frame(self._canvas)
+        body_id = self._canvas.create_window((0, 0), window=self._body, anchor=NW)
+        self._body.bind("<Configure>", lambda _e: self._canvas.configure(scrollregion=self._canvas.bbox("all")))
+        self._canvas.bind("<Configure>", lambda e: self._canvas.itemconfigure(body_id, width=e.width))
+        self.window.bind("<MouseWheel>", lambda e: self._canvas.yview_scroll(int(-e.delta / 120), "units"))
+        return self._body
+
+    def _fit_window(self):
+        self.window.update_idletasks()
+        body_h = self._body.winfo_reqheight()
+        self._canvas.configure(width=self._body.winfo_reqwidth(), height=body_h)
+        self.window.update_idletasks()
+        full_h = self.window.winfo_reqheight()
+        self._canvas.configure(height=body_h - (full_h - int(full_h * self.HEIGHT_SCALE)))
+        self.window.update_idletasks()
+        self._center_window(self.window, self.window.winfo_reqwidth(), self.window.winfo_reqheight())
+
+    # Post-build shrink so the build methods keep their normal-size layout values.
+    # Derived "QA.*" styles inherit from the ttkbootstrap styles without changing other windows.
+    def _compact(self):
+        style = ttk.Style.get_instance()
+        base_font = ("Segoe UI", self.FONT_SIZE)
+        style.configure("QA.TEntry", padding=2)
+        configured = set()
+
+        def derive(widget, default):
+            name = f"QA.{widget.cget('style') or default}"
+            if name not in configured:
+                opts = {"font": base_font}
+                if default == "TButton":
+                    opts["padding"] = self.BTN_PADDING
+                style.configure(name, **opts)
+                configured.add(name)
+            widget.configure(style=name)
+
+        def shrink(pad):
+            vals = pad if isinstance(pad, (tuple, list)) else str(pad).split()
+            return tuple(int(int(str(p)) * self.PAD_SCALE) for p in vals)
+
+        def walk(w):
+            cls = w.winfo_class()
+            if cls in ("TButton", "TCheckbutton"):
+                derive(w, cls)
+            elif cls == "TLabel":
+                f = w.cget("font")
+                if f:
+                    a = tkfont.Font(font=f).actual()
+                    w.configure(font=(a["family"], max(abs(a["size"]) - 2, self.FONT_SIZE), a["weight"]))
+                else:
+                    w.configure(font=base_font)
+            elif cls == "TEntry":
+                w.configure(font=base_font, style="QA.TEntry")
+            elif cls == "Labelframe":
+                w.configure(font=("Segoe UI", self.FONT_SIZE + 1, "bold"))
+            elif cls == "TFrame":
+                pad = w.cget("padding")
+                if pad:
+                    w.configure(padding=shrink(pad))
+            if w.winfo_manager() == "pack":
+                info = w.pack_info()
+                w.pack_configure(padx=shrink(info["padx"]), pady=shrink(info["pady"]))
+            elif w.winfo_manager() == "grid":
+                info = w.grid_info()
+                w.grid_configure(padx=shrink(info["padx"]), pady=shrink(info["pady"]))
+            for child in w.winfo_children():
+                walk(child)
+
+        walk(self.window)
+
     def _build_connection_bar(self, parent):
-        frame = ttk.Frame(parent)
-        frame.pack(fill=X, pady=(0, 8))
+        btn_row = ttk.Frame(parent)
+        btn_row.pack(fill=X, pady=(0, 4))
+        ttk.Button(btn_row, text="Connect All", bootstyle="success", command=self._connect_all).pack(side=LEFT, padx=(0, 6))
+        ttk.Button(btn_row, text="Disconnect All", bootstyle="danger", command=self._disconnect_all).pack(side=LEFT)
 
-        ttk.Button(frame, text="Connect All", bootstyle="success", command=self._connect_all).pack(side=LEFT, padx=(0, 6))
-        ttk.Button(frame, text="Disconnect All", bootstyle="danger", command=self._disconnect_all).pack(side=LEFT, padx=(0, 16))
-
+        dot_row = ttk.Frame(parent)
+        dot_row.pack(fill=X, pady=(0, 8))
         self.status_dots = {}
         for key, label in self.DEVICES:
-            dot = ttk.Label(frame, text="●", font=("Segoe UI", 10))
+            dot = ttk.Label(dot_row, text="●", font=("Segoe UI", 10))
             dot.pack(side=LEFT, padx=(0, 2))
-            lbl = ttk.Label(frame, text=label, font=("Segoe UI", 9))
-            lbl.pack(side=LEFT, padx=(0, 12))
+            ttk.Label(dot_row, text=label, font=("Segoe UI", 9)).pack(side=LEFT, padx=(0, 12))
             self.status_dots[key] = dot
         self._refresh_status_dots()
 
@@ -3687,11 +4004,10 @@ class QuickActionsWindow:
         columns = ttk.Frame(lf)
         columns.pack(fill=X, pady=(0, 6))
         columns.columnconfigure(0, weight=1)
-        columns.columnconfigure(1, weight=1)
 
-        # ===== Left column: N8734A =====
+        # ===== N8734A =====
         left = ttk.LabelFrame(columns, text="N8734A")
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        left.grid(row=0, column=0, sticky="nsew")
         left_inner = ttk.Frame(left, padding=8)
         left_inner.pack(fill=BOTH, expand=True)
 
@@ -3707,6 +4023,7 @@ class QuickActionsWindow:
         self.n8734a_cv.pack(side=LEFT, padx=(0, 8))
         self.n8734a_cc = ttk.Label(led_row, text="CC", font=("Segoe UI", 9, "bold"), foreground="gray")
         self.n8734a_cc.pack(side=LEFT)
+        ttk.Button(led_row, text="Readback", bootstyle="info-outline", command=self._readback_n8734a).pack(side=RIGHT)
 
         # Set V/I
         set_row1 = ttk.Frame(left_inner)
@@ -3729,9 +4046,9 @@ class QuickActionsWindow:
         ttk.Button(btn_row, text="Clr+OFF", bootstyle="warning", width=7, command=self._n8734a_clear_off).pack(side=LEFT, padx=(0, 2))
         ttk.Button(btn_row, text="Graph", bootstyle="primary", width=5, command=self._open_monitor_graph).pack(side=LEFT)
 
-        # ===== Right column: E36311A =====
+        # ===== E36311A =====
         right = ttk.LabelFrame(columns, text="E36311A")
-        right.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+        right.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
         right_inner = ttk.Frame(right, padding=8)
         right_inner.pack(fill=BOTH, expand=True)
 
@@ -3785,7 +4102,15 @@ class QuickActionsWindow:
         ttk.Button(ch2_btn, text="ON", bootstyle="success", width=4, command=lambda: self._output_cmd("power_supply", "OUTP ON, (@2)", self.e36_ch2_out, "(@2)")).pack(side=LEFT, padx=(0, 2))
         ttk.Button(ch2_btn, text="OFF", bootstyle="danger", width=4, command=lambda: self._output_cmd("power_supply", "OUTP OFF, (@2)", self.e36_ch2_out, "(@2)")).pack(side=LEFT)
 
+        e36_row = ttk.Frame(right_inner)
+        e36_row.pack(fill=X, pady=(6, 0))
+        ttk.Button(e36_row, text="Readback", bootstyle="info-outline", command=self._readback_e36).pack(side=LEFT)
+
         # --- Readback controls ---
+        read_row = ttk.Frame(lf)
+        read_row.pack(fill=X, pady=(6, 0))
+        ttk.Button(read_row, text="Read All Now", bootstyle="info-outline", command=self._update_readback).pack(side=LEFT)
+
         ctrl = ttk.Frame(lf)
         ctrl.pack(fill=X, pady=(6, 0))
         self.auto_var = ttk.BooleanVar(value=False)
@@ -3793,7 +4118,6 @@ class QuickActionsWindow:
         ttk.Label(ctrl, text="Interval (ms):").pack(side=LEFT, padx=(12, 4))
         self.interval_var = ttk.StringVar(value="1000")
         ttk.Entry(ctrl, textvariable=self.interval_var, width=6).pack(side=LEFT)
-        ttk.Button(ctrl, text="Read All Now", bootstyle="info-outline", command=self._update_readback).pack(side=RIGHT)
 
     def _build_waveform_section(self, parent):
         outer = ttk.LabelFrame(parent, text="Waveform Generator")
@@ -3801,10 +4125,9 @@ class QuickActionsWindow:
         lf = ttk.Frame(outer, padding=10)
         lf.pack(fill=BOTH, expand=True)
 
-        # Output control row
         row = ttk.Frame(lf)
         row.pack(fill=X, pady=(0, 4))
-        ttk.Label(row, text="33500B", font=("Segoe UI", 10, "bold"), width=10).pack(side=LEFT)
+        ttk.Label(row, text="33500B", font=("Segoe UI", 10, "bold")).pack(side=LEFT, padx=(0, 8))
         self.wg_out = ttk.Label(row, text="●", font=("Segoe UI", 12), foreground="gray")
         self.wg_out.pack(side=LEFT, padx=(0, 8))
         ttk.Button(row, text="ON", bootstyle="success", width=5, command=lambda: self._output_cmd("waveform_generator", "OUTP ON", self.wg_out)).pack(side=LEFT, padx=(0, 4))
@@ -3814,44 +4137,28 @@ class QuickActionsWindow:
         ttk.Entry(row, textvariable=self.wg_delay_var, width=6).pack(side=LEFT, padx=(0, 4))
         ttk.Button(row, text="Toggle", bootstyle="warning", width=7, command=self._wg_toggle).pack(side=LEFT)
 
-        # Parameters row
-        param_row = ttk.Frame(lf)
-        param_row.pack(fill=X, pady=(0, 4))
-        ttk.Label(param_row, text="", width=10).pack(side=LEFT)
-        ttk.Label(param_row, text="HIGH(mV):").pack(side=LEFT)
+        params = ttk.Frame(lf)
+        params.pack(fill=X, pady=(0, 4))
         self.wg_high_var = ttk.StringVar()
-        ttk.Entry(param_row, textvariable=self.wg_high_var, width=8).pack(side=LEFT, padx=(2, 4))
-        ttk.Button(param_row, text="Set", bootstyle="primary", width=4, command=self._wg_send_high).pack(side=LEFT, padx=(0, 8))
-        ttk.Label(param_row, text="DC(%):").pack(side=LEFT)
-        self.wg_dc_var = ttk.StringVar()
-        ttk.Entry(param_row, textvariable=self.wg_dc_var, width=6).pack(side=LEFT, padx=(2, 4))
-        ttk.Button(param_row, text="Set", bootstyle="primary", width=4, command=self._wg_send_dc).pack(side=LEFT, padx=(0, 8))
-        ttk.Label(param_row, text="Freq(kHz):").pack(side=LEFT)
+        self.wg_low_var  = ttk.StringVar()
+        self.wg_dc_var   = ttk.StringVar()
         self.wg_freq_var = ttk.StringVar()
-        ttk.Entry(param_row, textvariable=self.wg_freq_var, width=8).pack(side=LEFT, padx=(2, 4))
-        ttk.Button(param_row, text="Set", bootstyle="primary", width=4, command=self._wg_send_freq).pack(side=LEFT, padx=(0, 8))
-        ttk.Button(param_row, text="Read", bootstyle="info-outline", width=5, command=self._wg_read_params).pack(side=LEFT)
-
-        param_row2 = ttk.Frame(lf)
-        param_row2.pack(fill=X, pady=(0, 4))
-        ttk.Label(param_row2, text="", width=10).pack(side=LEFT)
-        ttk.Label(param_row2, text="LOW(mV):").pack(side=LEFT)
-        self.wg_low_var = ttk.StringVar()
-        ttk.Entry(param_row2, textvariable=self.wg_low_var, width=8).pack(side=LEFT, padx=(2, 4))
-        ttk.Button(param_row2, text="Set", bootstyle="primary", width=4, command=self._wg_send_low).pack(side=LEFT, padx=(0, 8))
-        ttk.Label(param_row2, text="Rise(ns):").pack(side=LEFT)
         self.wg_rise_var = ttk.StringVar()
-        ttk.Entry(param_row2, textvariable=self.wg_rise_var, width=6).pack(side=LEFT, padx=(2, 4))
-        ttk.Button(param_row2, text="Set", bootstyle="primary", width=4, command=self._wg_send_rise).pack(side=LEFT, padx=(0, 8))
-        ttk.Label(param_row2, text="Fall(ns):").pack(side=LEFT)
         self.wg_fall_var = ttk.StringVar()
-        ttk.Entry(param_row2, textvariable=self.wg_fall_var, width=8).pack(side=LEFT, padx=(2, 4))
-        ttk.Button(param_row2, text="Set", bootstyle="primary", width=4, command=self._wg_send_fall).pack(side=LEFT, padx=(0, 8))
+        layout = [
+            [("HIGH(mV):", self.wg_high_var, self._wg_send_high), ("LOW(mV):", self.wg_low_var, self._wg_send_low)],
+            [("DC(%):", self.wg_dc_var, self._wg_send_dc), ("Freq(kHz):", self.wg_freq_var, self._wg_send_freq)],
+            [("Rise(ns):", self.wg_rise_var, self._wg_send_rise), ("Fall(ns):", self.wg_fall_var, self._wg_send_fall)],
+        ]
+        for r, pair in enumerate(layout):
+            for c, (text, var, cmd) in enumerate(pair):
+                col = c * 3
+                ttk.Label(params, text=text).grid(row=r, column=col, sticky=W, padx=(8 if c else 0, 2), pady=(0, 4))
+                ttk.Entry(params, textvariable=var, width=8).grid(row=r, column=col + 1, padx=(0, 4), pady=(0, 4))
+                ttk.Button(params, text="Set", bootstyle="primary", width=4, command=cmd).grid(row=r, column=col + 2, pady=(0, 4))
 
-        # Load Tool Calculation row
         calc_row = ttk.Frame(lf)
         calc_row.pack(fill=X, pady=(0, 2))
-        ttk.Label(calc_row, text="", width=10).pack(side=LEFT)
         ttk.Label(calc_row, text="V(mV):").pack(side=LEFT)
         self.wg_calc_v_var = ttk.StringVar()
         ttk.Entry(calc_row, textvariable=self.wg_calc_v_var, width=8).pack(side=LEFT, padx=(2, 4))
@@ -3864,11 +4171,11 @@ class QuickActionsWindow:
 
         sr_row = ttk.Frame(lf)
         sr_row.pack(fill=X, pady=(4, 2))
-        ttk.Label(sr_row, text="", width=10).pack(side=LEFT)
         ttk.Label(sr_row, text="SR(kA/us):").pack(side=LEFT)
         self.wg_calc_sr_var = ttk.StringVar()
         ttk.Entry(sr_row, textvariable=self.wg_calc_sr_var, width=6).pack(side=LEFT, padx=(2, 4))
         ttk.Button(sr_row, text="Calc Rise/Fall", bootstyle="info", width=12, command=self._wg_calc_edge).pack(side=LEFT, padx=(0, 4))
+        ttk.Button(sr_row, text="Read", bootstyle="info-outline", width=5, command=self._readback_wg).pack(side=LEFT, padx=(0, 4))
         self.wg_calc_edge_result = ttk.Label(sr_row, text="", font=("Consolas", 9), bootstyle="success")
         self.wg_calc_edge_result.pack(side=LEFT, padx=(4, 0))
 
@@ -3903,6 +4210,95 @@ class QuickActionsWindow:
         self.scope_ip_label = ttk.Label(remote_row, text="---", font=("Consolas", 10))
         self.scope_ip_label.pack(side=LEFT, padx=(0, 8))
         ttk.Button(remote_row, text="Open Browser", bootstyle="primary", command=self._scope_open_browser).pack(side=LEFT)
+
+        setup_row = ttk.Frame(lf)
+        setup_row.pack(fill=X, pady=(4, 0))
+        ttk.Label(setup_row, text="", width=10).pack(side=LEFT)
+        ttk.Button(setup_row, text="Load Settings from PC", bootstyle="info", command=self._scope_load_settings).pack(side=LEFT, padx=(0, 4))
+        ttk.Button(setup_row, text="Arrange 16 PWM", bootstyle="warning-outline", command=self._scope_arrange_16pwm).pack(side=LEFT)
+
+    def _scope_arrange_16pwm(self):
+        inst = self.instruments.get("oscilloscope")
+        if not inst:
+            self._set_status("oscilloscope: not connected")
+            return
+        self._set_status("Arranging D0-D15 as PWM_1-PWM_16...")
+
+        def _do():
+            try:
+                msg = arrange_16pwm(inst)
+            except Exception as e:
+                msg = f"Arrange 16 PWM error: {e}"
+            self.window.after(0, lambda: self._set_status(msg))
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _scope_load_settings(self):
+        import csv
+        from tkinter import filedialog
+
+        inst = self.instruments.get("oscilloscope")
+        if not inst:
+            self._set_status("oscilloscope: not connected")
+            return
+        filepath = filedialog.askopenfilename(
+            parent=self.window,
+            title="Load Scope Settings",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+        if not filepath:
+            return
+        try:
+            with open(filepath, "r") as f:
+                settings = order_scope_settings([(row["command"], row["value"]) for row in csv.DictReader(f)])
+        except Exception as e:
+            self._set_status(f"Scope load: {e}")
+            return
+
+        self._set_status(f"Applying {len(settings)} scope settings...")
+
+        def _do_load():
+            import time
+            ok = 0
+            errors = 0
+            for cmd, value in settings:
+                full_cmd = f'{cmd} "{value.strip(chr(34))}"' if "LABel" in cmd else f"{cmd} {value}"
+                try:
+                    inst.write(full_cmd)
+                    ok += 1
+                except Exception:
+                    errors += 1
+                time.sleep(0.05)
+            msg = f"Applied {ok} scope settings from {os.path.basename(filepath)}"
+            if errors:
+                msg += f" ({errors} errors)"
+            self.window.after(0, lambda: self._set_status(msg))
+
+        threading.Thread(target=_do_load, daemon=True).start()
+
+    def _set_led(self, device_key, query, led):
+        inst = self.instruments.get(device_key)
+        try:
+            on = inst is not None and inst.query(query).strip() == "1"
+        except Exception:
+            on = False
+        led.config(foreground="#00d4aa" if on else "gray")
+
+    def _readback_n8734a(self):
+        self._refresh_status_dots()
+        self._read_n8734a()
+        self._set_led("high_power_supply", "OUTP?", self.n8734a_out)
+
+    def _readback_e36(self):
+        self._refresh_status_dots()
+        self._read_e36311a()
+        self._set_led("power_supply", "OUTP? (@1)", self.e36_ch1_out)
+        self._set_led("power_supply", "OUTP? (@2)", self.e36_ch2_out)
+
+    def _readback_wg(self):
+        self._refresh_status_dots()
+        self._wg_read_params()
+        self._set_led("waveform_generator", "OUTP?", self.wg_out)
 
     # --- SCPI helpers ---
 
@@ -3966,7 +4362,7 @@ class QuickActionsWindow:
                 inst.write("OUTP OFF")
                 self.window.after(0, lambda: self._set_status("WG toggle complete"))
             except Exception as e:
-                self.window.after(0, lambda: self._set_status(f"WG: {e}"))
+                self.window.after(0, lambda msg=f"WG: {e}": self._set_status(msg))
         threading.Thread(target=_toggle, daemon=True).start()
 
     def _wg_send_high(self):
@@ -4256,7 +4652,7 @@ class QuickActionsWindow:
         if not inst:
             self._set_status("high_power_supply: not connected")
             return
-        self.monitor_window = MonitorGraphWindow(self.window, self.monitor_history)
+        self.monitor_window = MonitorGraphWindow(self.window, self.monitor_history, inst)
         self.fast_poll_active = True
         threading.Thread(target=self._fast_poll_loop, daemon=True).start()
 
@@ -4458,7 +4854,7 @@ class InstrumentGUIv2:
         btn_frame = ttk.Frame(self.root, padding=20)
         btn_frame.pack(fill=X)
         ttk.Button(
-            btn_frame, text="Quick Actions",
+            btn_frame, text="Frequent Use",
             bootstyle="success", command=self._open_quick_actions
         ).pack(side=LEFT)
 
