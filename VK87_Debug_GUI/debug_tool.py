@@ -321,6 +321,18 @@ class DebugToolApp:
             print(msg)
             if hasattr(self, "log_text"):
                 self._log(msg)
+            freq_mhz = None
+            try:
+                freq_mhz = self.controller.svi3.get_bus_frequency() / 1e6
+                freq_msg = f"SVI3 Bus Freq: {freq_mhz:g} MHz"
+            except Exception as e:
+                freq_msg = f"SVI3 Bus Freq: ERROR: {e}"
+            print(freq_msg)
+            if hasattr(self, "log_text"):
+                self._log(freq_msg)
+            if freq_mhz is not None and hasattr(self, "svi3_freq_entry"):
+                self.svi3_freq_entry.delete(0, "end")
+                self.svi3_freq_entry.insert(0, f"{freq_mhz:g}")
         except Exception as e:
             self.svi3_version = "N/A"
             msg = f"SVI3 init warning: {e}"
@@ -351,10 +363,13 @@ class DebugToolApp:
         }
         select[rail]()
 
+    def _svi3_addr(self, rail):
+        return getattr(self.controller.svi3.address, rail)
+
     def _wake_svi3_rail(self, rail):
         self._select_svi3_rail(rail)
         try:
-            self.controller.svi3.measure_output_voltage(split=True)
+            self.controller.svi3.read_register(0x01)
         except Exception:
             pass
 
@@ -443,6 +458,36 @@ class DebugToolApp:
             font=("Segoe UI", 11), fg_color="#e74c3c", hover_color="#c0392b",
             command=self._disconnect,
         ).pack(side="right", padx=(0, 5), pady=10)
+
+        ctk.CTkButton(
+            frame, text="Set SVI3 Freq", width=100, height=28,
+            font=("Segoe UI", 11), fg_color="#2980b9", hover_color="#2471a3",
+            command=self._svi3_set_bus_freq,
+        ).pack(side="right", padx=(0, 15), pady=10)
+
+        ctk.CTkLabel(frame, text="MHz", font=("Segoe UI", 11),
+                     text_color=COLOR_TEXT).pack(side="right", padx=(0, 5), pady=10)
+        self.svi3_freq_entry = ctk.CTkEntry(frame, width=50, font=("Consolas", 11))
+        self.svi3_freq_entry.pack(side="right", padx=(0, 3), pady=10)
+        try:
+            self.svi3_freq_entry.insert(0, f"{self.controller.svi3.get_bus_frequency() / 1e6:g}")
+        except Exception:
+            self.svi3_freq_entry.insert(0, "10")
+
+    def _svi3_set_bus_freq(self):
+        try:
+            mhz = float(self.svi3_freq_entry.get().strip())
+        except ValueError:
+            self._log("SVI3 Bus Freq: invalid value")
+            return
+        try:
+            before = self.controller.svi3.get_bus_frequency() / 1e6
+            self.controller.svi3.set_bus_frequency(MHz=mhz)
+            after = self.controller.svi3.get_bus_frequency() / 1e6
+            match = "OK" if round(after) == round(mhz) else "MISMATCH"
+            self._log(f"SVI3 Bus Freq  before={before:g} MHz  set={mhz:g} MHz  readback={after:g} MHz  {match}")
+        except Exception as e:
+            self._log(f"SVI3 Bus Freq  set={mhz:g} MHz  ERROR: {e}")
 
     # ── Tab Container ──────────────────────────────────────────────────────
     def _build_tabs(self):
@@ -1037,7 +1082,7 @@ class DebugToolApp:
         rail = self.svi3_rail_var.get()
         self._wake_svi3_rail(rail)
         try:
-            result = self.controller.svi3.measure_output_voltage(split=True)
+            result = self.controller.svi3.measure_output_voltage(address=self._svi3_addr(rail), split=True)
             if result is None or result[0] is None:
                 line = f"SVI3 Tel  Rail {rail}  VOUT = NACK"
             else:
@@ -1051,7 +1096,7 @@ class DebugToolApp:
         rail = self.svi3_rail_var.get()
         self._wake_svi3_rail(rail)
         try:
-            iout, raw = self.controller.svi3.measure_output_current(split=True)
+            iout, raw = self.controller.svi3.measure_output_current(address=self._svi3_addr(rail), split=True)
             line = f"SVI3 Tel  Rail {rail}  IOUT = {iout:.2f} A  (raw=0x{raw:04X})"
         except Exception as e:
             line = f"SVI3 Tel  Rail {rail}  IOUT = ERROR: {e}"
@@ -1061,7 +1106,7 @@ class DebugToolApp:
         rail = self.svi3_rail_var.get()
         self._wake_svi3_rail(rail)
         try:
-            result = self.controller.svi3.measure_input_voltage(raw=True)
+            result = self.controller.svi3.measure_input_voltage(address=self._svi3_addr(rail), raw=True)
             if result is None:
                 line = f"SVI3 Tel  Rail {rail}  VIN = NACK"
             else:
@@ -1079,7 +1124,7 @@ class DebugToolApp:
         rail = self.svi3_rail_var.get()
         self._wake_svi3_rail(rail)
         try:
-            temp = self.controller.svi3.measure_temperature()
+            temp = self.controller.svi3.measure_temperature(address=self._svi3_addr(rail))
             if isinstance(temp, (list, tuple)):
                 line = f"SVI3 Tel  Rail {rail}  TEMP = {temp[0]:.1f} C  (raw=0x{temp[1]:04X})"
             else:
@@ -1117,7 +1162,7 @@ class DebugToolApp:
 
         self._wake_svi3_rail(rail)
         try:
-            result = self.controller.svi3.measure_output_voltage(split=True)
+            result = self.controller.svi3.measure_output_voltage(address=self._svi3_addr(rail), split=True)
             if result is None or result[0] is None:
                 self._log(f"SVI3 Set VOUT  Rail {rail}  readback=NACK")
             else:
@@ -1238,17 +1283,17 @@ class DebugToolApp:
     def _tel_read_svi3(self, rail, key, fmt):
         self._wake_svi3_rail(rail)
         if key == "vout":
-            result = self.controller.svi3.measure_output_voltage(split=True)
+            result = self.controller.svi3.measure_output_voltage(address=self._svi3_addr(rail), split=True)
             if result is None or result[0] is None:
                 return "NACK"
             return f"{result[0]:{fmt}} (0x{result[1]:04X})"
         elif key == "iout":
-            result = self.controller.svi3.measure_output_current(split=True)
+            result = self.controller.svi3.measure_output_current(address=self._svi3_addr(rail), split=True)
             if result is None or result[0] is None:
                 return "NACK"
             return f"{result[0]:{fmt}} (0x{result[1]:04X})"
         elif key == "vin":
-            result = self.controller.svi3.measure_input_voltage(raw=True)
+            result = self.controller.svi3.measure_input_voltage(address=self._svi3_addr(rail), raw=True)
             if result is None:
                 return "NACK"
             raw = int(result)
@@ -1257,7 +1302,7 @@ class DebugToolApp:
             vin = raw * V_IN_SCALE_VALUES[vin_scale_code] / 1024
             return f"{vin:{fmt}} (0x{raw:04X})"
         elif key == "temp":
-            result = self.controller.svi3.measure_temperature()
+            result = self.controller.svi3.measure_temperature(address=self._svi3_addr(rail))
             if result is None:
                 return "NACK"
             if isinstance(result, (list, tuple)):
