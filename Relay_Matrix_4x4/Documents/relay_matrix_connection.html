@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Relay Matrix 4x4 -- how the connections work</title>
+<style>
+  body    { font-family: "Segoe UI", Arial, sans-serif; max-width: 980px; margin: 24px auto; padding: 0 16px;
+            color: #222; background: #FAFAFA; line-height: 1.5; }
+  h1      { font-size: 22px; margin-bottom: 4px; }
+  h2      { font-size: 17px; margin-top: 36px; border-bottom: 1px solid #DDD; padding-bottom: 4px; }
+  .sub    { color: #666; margin-top: 0; }
+  .fig    { background: #FFF; border: 1px solid #E2E2E2; border-radius: 6px; padding: 12px; margin: 12px 0; }
+  .row    { display: flex; gap: 16px; flex-wrap: wrap; }
+  .cap    { font-size: 13px; color: #555; margin-top: 4px; }
+  .key    { display: inline-block; width: 26px; height: 4px; vertical-align: middle; margin-right: 6px; border-radius: 2px; }
+  table   { border-collapse: collapse; margin: 8px 0; font-size: 14px; }
+  th, td  { border: 1px solid #DDD; padding: 5px 10px; text-align: left; }
+  th      { background: #F0F0F0; }
+  code    { background: #EFEFEF; padding: 1px 4px; border-radius: 3px; }
+  .warn   { color: #C62828; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>Relay Matrix 4x4 -- how the connections work</h1>
+<p class="sub">Simplified view. Each relay is drawn as a switch between a row wire (SIG_IN) and a column wire (SIG_OUT).</p>
+
+<h2>1. One relay at a crosspoint</h2>
+<p>A row wire and a column wire <b>cross without touching</b>. The relay sits between them:
+one terminal on the row, the other on the column. Only a <b>closed</b> relay joins the two wires.</p>
+<div class="fig row">
+  <div><svg id="one-open"></svg><div class="cap">Open: the row carries VOUT_B, the column stays idle.</div></div>
+  <div><svg id="one-closed"></svg><div class="cap">Closed: VOUT_B flows into SIG_OUT2.</div></div>
+</div>
+
+<h2>2. One device (4 x 4) -- example: K7 and K10 closed</h2>
+<p>All 4 relays in a row share the <b>same row wire</b>, so the whole SIG_IN row carries its source
+at all 4 relays, whether they are open or closed. Likewise, all relays in a column share the same column wire.</p>
+<div class="fig"><svg id="dev"></svg>
+  <div class="cap">
+    <span class="key" style="background:#E08A2E"></span>VOUT_A &nbsp;
+    <span class="key" style="background:#2E9E5B"></span>VOUT_B &nbsp;
+    <span class="key" style="background:#3A7BD5"></span>VOUT_C &nbsp;
+    <span class="key" style="background:#9B59B6"></span>VOUT_D &nbsp;
+    <span class="key" style="background:#B0B4B8"></span>idle column &nbsp;
+    <span class="warn">red ring</span> = closing this relay would short two sources
+  </div>
+</div>
+<ul>
+  <li><b>K7</b> closed: VOUT_B (SIG_IN2) &rarr; SIG_OUT3. The SIG_OUT3 column now carries VOUT_B.</li>
+  <li><b>K10</b> closed: VOUT_C (SIG_IN3) &rarr; SIG_OUT2. The SIG_OUT2 column now carries VOUT_C.</li>
+  <li><b>K6</b> is open. It has VOUT_B on its row terminal and VOUT_C on its column terminal.
+      <b>Nothing is shorted now</b>, but <span class="warn">closing K6 would short VOUT_B to VOUT_C</span>.</li>
+  <li>The same applies to every other red-ringed relay: each has one source on its row and a <i>different</i>
+      source already on its column (for example K2 would short VOUT_A to VOUT_C, K11 would short VOUT_C to VOUT_B).</li>
+</ul>
+
+<h2>3. SIG_OUT columns are shared by every device</h2>
+<p>SIG_OUT1-4 are tied together across all MCP devices on the board, so each column is one long bus.
+A relay closed on device 0 puts its source onto that column for <b>every</b> device below it as well.</p>
+<div class="fig"><svg id="bus"></svg>
+  <div class="cap">Device 0 K10 puts VOUT_C on SIG_OUT2. Every open relay on SIG_OUT2 in device 1 now has VOUT_C
+    on its column terminal, so closing any of them would short its own source to VOUT_C.</div>
+</div>
+
+<h2>4. What the GUI interlocks prevent</h2>
+<table>
+  <tr><th>Lock</th><th>Rule</th><th>Blocks in the K7 + K10 example</th></tr>
+  <tr><td>Column lock</td><td>Only one closed relay per SIG_OUT column, across all devices</td>
+      <td>Any relay on SIG_OUT2 or SIG_OUT3 (every red ring above, including device 1)</td></tr>
+  <tr><td>Row lock</td><td>Only one closed relay per SIG_IN row</td>
+      <td>K5, K6, K8 (SIG_IN2 already used by K7) and K9, K11, K12 (SIG_IN3 already used by K10)</td></tr>
+</table>
+<p>With both locks on, each source connects to at most one output, and each output to at most one source.
+Opening a relay is never blocked.</p>
+
+<script>
+const IDLE = "#B0B4B8";
+const BG   = "#FFFFFF";
+const NS   = "http://www.w3.org/2000/svg";
+
+function el(svg, tag, attrs, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  svg.appendChild(e);
+  return e;
+}
+
+// rows: [{label, name, color, dev}], closed: ["r,c"], cols: number of columns
+function matrix(id, rows, closed, opt = {}) {
+  const cols   = opt.cols  ?? 4;
+  const cellW  = opt.cellW ?? 96;
+  const cellH  = opt.cellH ?? 64;
+  const left   = opt.left  ?? 170;
+  const top    = 46;
+  const width  = left + cols * cellW + 20;
+  const height = top + rows.length * cellH + 10;
+  const svg    = document.getElementById(id);
+  svg.setAttribute("width", width);
+  svg.setAttribute("height", height);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+
+  const isClosed = new Set(closed);
+  const colNet   = {};
+  for (const key of closed) {
+    const [r, c] = key.split(",").map(Number);
+    colNet[c] = rows[r].color;
+  }
+  const cx = c => left + c * cellW + cellW / 2;
+  const ry = r => top + r * cellH + cellH / 2 - 10;
+
+  for (let r = 1; r < rows.length; r++) {
+    if (rows[r].dev !== rows[r - 1].dev) {
+      const y = top + r * cellH + 2;
+      el(svg, "line", {x1: 4, y1: y, x2: width - 4, y2: y, stroke: "#999", "stroke-dasharray": "6 4"});
+      el(svg, "text", {x: 6, y: y - 4, "font-size": 11, fill: "#777"}, `Device ${rows[r].dev}`);
+    }
+  }
+  if (rows.length > 1 && rows[0].dev !== undefined)
+    el(svg, "text", {x: 6, y: top - 4, "font-size": 11, fill: "#777"}, `Device ${rows[0].dev}`);
+
+  for (let c = 0; c < cols; c++) {
+    const n = opt.colNames ? opt.colNames[c] : c + 1;
+    el(svg, "text", {x: cx(c), y: 16, "text-anchor": "middle", "font-size": 13, "font-weight": 600,
+                     fill: colNet[c] ?? "#555"}, `SIG_OUT${n}`);
+    el(svg, "line", {x1: cx(c), y1: 24, x2: cx(c), y2: height - 6, stroke: colNet[c] ?? IDLE,
+                     "stroke-width": colNet[c] ? 4 : 2});
+  }
+
+  rows.forEach((row, r) => {
+    const y = ry(r);
+    el(svg, "text", {x: 8, y: y + 4, "font-size": 13, "font-weight": 600, fill: row.color}, row.label);
+    el(svg, "text", {x: 88, y: y + 4, "font-size": 12, fill: "#444"}, row.name);
+    el(svg, "line", {x1: left - 14, y1: y, x2: width - 10, y2: y, stroke: row.color, "stroke-width": 4});
+    // Gap in the row where each column crosses, so the crossing reads as "not connected"
+    for (let c = 0; c < cols; c++)
+      el(svg, "rect", {x: cx(c) - 4, y: y - 4, width: 8, height: 8, fill: BG});
+    for (let c = 0; c < cols; c++) {
+      const x = cx(c);
+      el(svg, "path", {d: `M ${x - 4} ${y} A 4 4 0 0 1 ${x + 4} ${y}`, fill: "none", stroke: row.color, "stroke-width": 3});
+      const on   = isClosed.has(`${r},${c}`);
+      const ax   = x - 26, ay = y;
+      const bx   = x,      by = y + 26;
+      const k    = (opt.kBase ?? 0) + (r % 4) * 4 + c + 1;
+      const danger = !on && colNet[c] && colNet[c] !== row.color;
+      if (on) {
+        el(svg, "line", {x1: ax, y1: ay, x2: bx, y2: by, stroke: row.color, "stroke-width": 4});
+      } else {
+        el(svg, "line", {x1: ax, y1: ay, x2: bx - 16, y2: by - 2, stroke: "#555", "stroke-width": 2});
+      }
+      el(svg, "circle", {cx: ax, cy: ay, r: 4, fill: row.color});
+      el(svg, "circle", {cx: bx, cy: by, r: 4, fill: colNet[c] ?? IDLE});
+      if (danger)
+        el(svg, "circle", {cx: (ax + bx) / 2, cy: (ay + by) / 2, r: 21, fill: "none", stroke: "#C62828",
+                           "stroke-width": 2, "stroke-dasharray": "4 3"});
+      el(svg, "text", {x: ax - 16, y: by + 4, "text-anchor": "end", "font-size": 12,
+                       "font-weight": on ? 700 : 400, fill: on ? "#111" : "#888"},
+         opt.kLabel ?? `K${k}${on ? " ON" : ""}`);
+    }
+  });
+}
+
+const A = "#E08A2E", B = "#2E9E5B", C = "#3A7BD5", D = "#9B59B6", X = "#8D6E63";
+const dev0 = [
+  {label: "SIG_IN1", name: "VOUT_A", color: A, dev: 0},
+  {label: "SIG_IN2", name: "VOUT_B", color: B, dev: 0},
+  {label: "SIG_IN3", name: "VOUT_C", color: C, dev: 0},
+  {label: "SIG_IN4", name: "VOUT_D", color: D, dev: 0},
+];
+const one = [{label: "SIG_IN2", name: "VOUT_B", color: B}];
+
+matrix("one-open",   one, [],      {cols: 1, colNames: [2], kLabel: "K6 open"});
+matrix("one-closed", one, ["0,0"], {cols: 1, colNames: [2], kLabel: "K6 closed"});
+matrix("dev", dev0, ["1,2", "2,1"]);
+matrix("bus", [...dev0,
+  {label: "SIG_IN5", name: "source 5", color: X, dev: 1},
+  {label: "SIG_IN6", name: "source 6", color: X, dev: 1},
+  {label: "SIG_IN7", name: "source 7", color: X, dev: 1},
+  {label: "SIG_IN8", name: "source 8", color: X, dev: 1},
+], ["2,1"], {cellH: 56});
+</script>
+</body>
+</html>

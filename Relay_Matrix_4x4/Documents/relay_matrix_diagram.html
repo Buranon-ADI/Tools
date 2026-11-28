@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Relay Matrix -- Simplified Diagram</title>
+<style>
+  body { font-family: Consolas, "Segoe UI", monospace; background:#fafafa; color:#222; margin:20px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  h2 { font-size:16px; margin:24px 0 8px; }
+  .sub { color:#666; font-size:12px; margin-bottom:12px; }
+  svg { background:#fff; border:1px solid #ccc; }
+  .row-line { stroke:#1a8f1a; stroke-width:2.5; }
+  .col-bus  { stroke:#1f5fbf; stroke-width:2.5; }
+  .wire     { stroke:#444; stroke-width:1.5; fill:none; }
+  .res      { fill:#fff; stroke:#a33; stroke-width:1.5; }
+  .res-t    { font-size:10px; fill:#a33; }
+  .coil     { fill:#fff8e8; stroke:#8a5a00; stroke-width:1.5; }
+  .coil-t   { font-size:10px; fill:#8a5a00; }
+  .sw       { stroke:#8a2a2a; stroke-width:2.5; }
+  .sw.on    { stroke:#e0007a; }
+  .relay    { cursor:pointer; }
+  .relay:hover .coil { fill:#ffe3a8; }
+  .kname    { font-size:13px; font-weight:bold; fill:#8a2a2a; }
+  .net      { font-size:11px; fill:#0033cc; }
+  .lbl      { font-size:13px; font-weight:bold; }
+  .dot      { fill:#c00; }
+  .dash     { stroke:#8a2a2a; stroke-dasharray:4 3; stroke-width:1.2; }
+  table { border-collapse:collapse; font-size:12px; background:#fff; }
+  th, td { border:1px solid #bbb; padding:3px 8px; text-align:left; }
+  th { background:#eee; }
+  .grid2 { display:flex; gap:24px; flex-wrap:wrap; }
+  .note { font-size:12px; color:#444; max-width:1000px; line-height:1.5; }
+  code { background:#eee; padding:0 3px; }
+</style>
+</head>
+<body>
+<h1>Relay Matrix -- 4 x 4 (K1..K16, Omron G6L-1F DC5, SPST-NO)</h1>
+<div class="sub">Source: Schematic_relay_matrix_2026-11-03.pdf, sheet "Relays" (rev 1.0). Click a relay to toggle it and highlight the closed path.</div>
+
+<svg id="mx" width="1060" height="800" viewBox="0 0 1060 800"></svg>
+
+<div class="note">
+<p><b>Topology.</b> Each relay contact connects a row node (<code>sig_in_*</code>) to a column node (<code>sig_out_*</code>).
+Row nodes are daisy-chained along the row through 0&Omega; links; each relay output node ties to its column bus through one 0&Omega; link.
+With all 0&Omega; fitted it is a standard crosspoint matrix: closing K(r,c) connects <code>sig_in_r</code> to column bus c.
+Removing the 0&Omega; links splits the board into 16 independent relays, each accessible at its own <code>sig_in_kN</code> / <code>sig_out_kN</code> pin on H19..H22.</p>
+<p><b>Coil drive.</b> Coil high side = +5V, low side = <code>IO_cr</code> (c = column, r = row) sunk by ULN2803 (U5/U6), driven from MCP23017 (U4) via jumper headers H10/H11.</p>
+</div>
+
+<div class="grid2">
+<div>
+<h2>Coil control map</h2>
+<table id="ctl">
+  <tr><th>Relay</th><th>Row</th><th>Col</th><th>MCP23017</th><th>Jumper</th><th>ULN</th><th>Coil net</th></tr>
+</table>
+</div>
+<div>
+<h2>0&Omega; links</h2>
+<table id="links">
+  <tr><th>Ref</th><th>From</th><th>To</th><th>Function</th></tr>
+</table>
+</div>
+<div>
+<h2>Connectors</h2>
+<table>
+  <tr><th>Ref</th><th>Part</th><th>Pins 1..8</th></tr>
+  <tr><td>H13</td><td>HTSW-108-08-F-S-RA</td><td>+5V, GND, SCL, SDA, sig_in_4, sig_in_3, sig_in_2, sig_in_1</td></tr>
+  <tr><td>H14</td><td>MTSW-108-07-S-S-240</td><td>+5V, GND, SCL, SDA, sig_in_4, sig_in_3, sig_in_2, sig_in_1</td></tr>
+  <tr><td>U7</td><td>SSW-108-02-T-S-RA</td><td>sig_in_1, sig_in_2, sig_in_3, sig_in_4, SDA, SCL, GND, +5V</td></tr>
+  <tr><td>H15</td><td>HTSW-108-08-F-S-RA</td><td>+5V, GND, SCL, SDA, sig_out_4, sig_out_3, sig_out_2, sig_out_1</td></tr>
+  <tr><td>H16</td><td>MTSW-108-07-S-S-240</td><td>+5V, GND, SCL, SDA, sig_out_4, sig_out_3, sig_out_2, sig_out_1</td></tr>
+  <tr><td>U8</td><td>SSW-108-02-T-S-RA</td><td>sig_out_1, sig_out_2, sig_out_3, sig_out_4, SDA, SCL, GND, +5V</td></tr>
+  <tr><td>H19</td><td>MTSW-108-07-S-S-240</td><td>sig_in_1, sig_in_k2, sig_in_k3, sig_in_k4, sig_in_2, sig_in_k6, sig_in_k7, sig_in_k8</td></tr>
+  <tr><td>H20</td><td>MTSW-108-07-S-S-240</td><td>sig_in_3, sig_in_k10, sig_in_k11, sig_in_k12, sig_in_4, sig_in_k14, sig_in_k15, sig_in_k16</td></tr>
+  <tr><td>H21</td><td>MTSW-108-07-S-S-240</td><td>sig_out_1, sig_out_2, sig_out_3, sig_out_4, sig_out_k5, sig_out_k6, sig_out_k7, sig_out_k8</td></tr>
+  <tr><td>H22</td><td>MTSW-108-07-S-S-240</td><td>sig_out_k9, sig_out_k10, sig_out_k11, sig_out_k12, sig_out_k13, sig_out_k14, sig_out_k15, sig_out_k16</td></tr>
+</table>
+</div>
+</div>
+
+<script>
+const NS = "http://www.w3.org/2000/svg";
+const svg = document.getElementById("mx");
+
+// [row][col] = relay number
+const K = [[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16]];
+// output link per relay (relay node -> column bus)
+const OUT_R = {1:"R11",5:"R12",9:"R14",13:"R37", 2:"R13",6:"R16",10:"R17",14:"R18",
+               3:"R19",7:"R20",11:"R21",15:"R22", 4:"R23",8:"R24",12:"R25",16:"R26"};
+// series links on each row between column c and c+1
+const ROW_R = [
+  [["R27"],        ["R28"], ["R29"]],
+  [["R30"],        ["R31"], ["R32"]],
+  [["R15","R33"],  ["R34"], ["R35"]],
+  [["R36","R38"],  ["R39"], ["R40"]],
+];
+const MCP = {1:"GPA0",2:"GPA1",3:"GPA2",4:"GPA3",5:"GPA4",6:"GPA5",7:"GPA6",8:"GPA7",
+             9:"GPB0",10:"GPB1",11:"GPB2",12:"GPB3",13:"GPB4",14:"GPB5",15:"GPB6",16:"GPB7"};
+
+const inNet  = (r,c) => c===0 ? `sig_in_${r+1}`  : `sig_in_k${K[r][c]}`;
+const outNet = (r,c) => r===0 ? `sig_out_${c+1}` : `sig_out_k${K[r][c]}`;
+const ioNet  = (r,c) => `IO_${c+1}${r+1}`;
+
+const X0 = 170, DX = 215, Y0 = 90, DY = 175;
+const swX  = c => X0 + c*DX;          // switch x
+const busX = c => swX(c) + 95;        // column bus x
+const rowY = r => Y0 + r*DY + 110;    // row line y
+const topY = r => Y0 + r*DY + 20;     // relay output node y
+
+function el(tag, attrs, parent=svg, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  parent.appendChild(e);
+  return e;
+}
+function resistor(x, y, name, horiz=true, parent=svg) {
+  if (horiz) {
+    el("rect", {x:x-14, y:y-6, width:28, height:12, class:"res"}, parent);
+    el("text", {x:x, y:y-9, "text-anchor":"middle", class:"res-t"}, parent, name);
+  }
+}
+function dot(x, y) { el("circle", {cx:x, cy:y, r:3.5, class:"dot"}); }
+
+const state = {};
+const hl = el("g", {id:"hl"});
+
+// column buses
+for (let c=0; c<4; c++) {
+  el("line", {x1:busX(c), y1:topY(0)-30, x2:busX(c), y2:topY(3)+40, class:"col-bus"});
+  el("text", {x:busX(c), y:topY(0)-38, "text-anchor":"middle", class:"lbl", fill:"#1f5fbf"}, svg, `COL ${c+1}`);
+  el("text", {x:busX(c), y:topY(3)+56, "text-anchor":"middle", class:"net"}, svg, `column bus ${c+1}`);
+}
+
+for (let r=0; r<4; r++) {
+  const y = rowY(r);
+  // row frame label
+  el("text", {x:15, y:y+4, class:"lbl", fill:"#1a8f1a"}, svg, `ROW ${r+1}`);
+  // row input
+  el("line", {x1:80, y1:y, x2:swX(0), y2:y, class:"row-line"});
+  el("text", {x:82, y:y-6, class:"net"}, svg, `sig_in_${r+1}`);
+
+  // row chain segments with series links
+  for (let c=0; c<3; c++) {
+    const xa = swX(c), xb = swX(c+1), rs = ROW_R[r][c];
+    el("line", {x1:xa, y1:y, x2:xb, y2:y, class:"row-line"});
+    const n = rs.length;
+    rs.forEach((name,i) => resistor(xa + (xb-xa)*(i+1)/(n+1) + (i===0 && n===1 ? 25 : (i===0 ? -10 : 25)), y, name));
+  }
+
+  for (let c=0; c<4; c++) {
+    const k = K[r][c], x = swX(c), yt = topY(r), bx = busX(c);
+    const g = el("g", {class:"relay", "data-k":k});
+    // contact: row node (bottom) -> output node (top)
+    el("line", {x1:x, y1:y, x2:x, y2:y-22, class:"wire"}, g);
+    el("line", {x1:x, y1:yt, x2:x, y2:yt+28, class:"wire"}, g);
+    const sw = el("line", {x1:x, y1:y-22, x2:x+16, y2:yt+30, class:"sw"}, g);
+    el("circle", {cx:x, cy:y-22, r:2.5, fill:"#333"}, g);
+    el("circle", {cx:x, cy:yt+28, r:2.5, fill:"#333"}, g);
+    // coil
+    const cy = (y+yt)/2 - 8;
+    el("rect", {x:x-80, y:cy-14, width:42, height:28, class:"coil"}, g);
+    el("line", {x1:x-70, y1:cy+14, x2:x-48, y2:cy-14, stroke:"#8a5a00", "stroke-width":1.2}, g);
+    el("line", {x1:x-38, y1:cy, x2:x+8, y2:cy, class:"dash"}, g);
+    el("text", {x:x-59, y:cy-19, "text-anchor":"middle", class:"coil-t"}, g, "+5V");
+    el("text", {x:x-59, y:cy+26, "text-anchor":"middle", class:"coil-t"}, g, ioNet(r,c));
+    el("text", {x:x-59, y:cy+37, "text-anchor":"middle", class:"coil-t"}, g, MCP[k]);
+    el("text", {x:x+22, y:cy+4, class:"kname"}, g, `K${k}`);
+    // output node -> link -> column bus
+    el("line", {x1:x, y1:yt, x2:bx, y2:yt, class:"wire"});
+    resistor((x+bx)/2 + 12, yt, OUT_R[k]);
+    dot(x, yt); dot(bx, yt); dot(x, y);
+    // net names
+    el("text", {x:x-3, y:yt-6, "text-anchor":"end", class:"net"}, svg, outNet(r,c));
+    if (c>0) el("text", {x:x-3, y:y+15, "text-anchor":"end", class:"net"}, svg, inNet(r,c));
+
+    state[k] = false;
+    g.addEventListener("click", () => {
+      state[k] = !state[k];
+      sw.setAttribute("x2", state[k] ? x : x+16);
+      sw.classList.toggle("on", state[k]);
+      drawHighlight();
+    });
+  }
+}
+
+// row lines cross column buses without connecting -- draw a hop
+for (let r=0; r<4; r++) for (let c=0; c<4; c++) {
+  if (c===3 || r===3) continue;
+  const x = busX(c), y = rowY(r);
+  el("rect", {x:x-7, y:y-3, width:14, height:6, fill:"#fff"});
+  el("path", {d:`M ${x-7} ${y} A 7 7 0 0 1 ${x+7} ${y}`, fill:"none", class:"row-line"});
+  el("line", {x1:x, y1:y-10, x2:x, y2:y+10, class:"col-bus"});
+}
+
+function drawHighlight() {
+  while (hl.firstChild) hl.removeChild(hl.firstChild);
+  svg.appendChild(hl);
+  for (let r=0; r<4; r++) for (let c=0; c<4; c++) {
+    if (!state[K[r][c]]) continue;
+    const pts = `80,${rowY(r)} ${swX(c)},${rowY(r)} ${swX(c)},${topY(r)} ${busX(c)},${topY(r)} ${busX(c)},${topY(0)-30}`;
+    el("polyline", {points:pts, fill:"none", stroke:"#e0007a", "stroke-width":5, opacity:0.35}, hl);
+  }
+  const on = Object.keys(state).filter(k => state[k]).map(k => "K"+k);
+  document.getElementById("status").textContent = on.length ? "Closed: " + on.join(", ") : "All relays open";
+}
+el("text", {id:"status", x:1040, y:24, "text-anchor":"end", class:"net"}, svg, "All relays open");
+
+// tables
+const ctl = document.getElementById("ctl");
+for (let k=1; k<=16; k++) {
+  const r = Math.floor((k-1)/4), c = (k-1)%4;
+  const bank = k<=8 ? "A" : "B", n = (k-1)%8;
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td>K${k}</td><td>${r+1}</td><td>${c+1}</td><td>${MCP[k]}</td>` +
+    `<td>${bank==="A"?"H10":"H11"} -> P${bank==="A"?0:1}${n}_ULN</td>` +
+    `<td>${bank==="A"?"U5":"U6"} ch${n+1}</td><td>${ioNet(r,c)}</td>`;
+  ctl.appendChild(tr);
+}
+const links = document.getElementById("links");
+const addLink = (ref, a, b, f) => { const tr = document.createElement("tr");
+  tr.innerHTML = `<td>${ref}</td><td>${a}</td><td>${b}</td><td>${f}</td>`; links.appendChild(tr); };
+for (let r=0; r<4; r++) for (let c=0; c<4; c++)
+  addLink(OUT_R[K[r][c]], outNet(r,c), `column bus ${c+1}`, `K${K[r][c]} -> col ${c+1}`);
+for (let r=0; r<4; r++) for (let c=0; c<3; c++) {
+  const rs = ROW_R[r][c];
+  addLink(rs.join(" + "), inNet(r,c), inNet(r,c+1), `row ${r+1} chain${rs.length>1?" (2 in series)":""}`);
+}
+</script>
+</body>
+</html>
